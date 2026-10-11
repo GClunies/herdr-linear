@@ -28,6 +28,11 @@ const usage = `herdr-linear — Linear issues and projects in herdr
                    workspace W (its URL key or name), or every workspace
   logout --local [W]  only forget the tokens here, without revoking
   status           show the workspaces you're signed in to
+  tick [--force]   refresh the sidebar labels ($issue, $issue_state,
+                   $issue_title); herdr runs this on its events. --force asks
+                   Linear again right away
+  handoff JSON     (internal) open the popup this one was opened from, once
+                   this one has closed
   kickoff W P      (internal) wait for pane P's agent in workspace W, then
                    send it the prompt read from stdin
 `
@@ -69,7 +74,10 @@ func run(ctx context.Context, args []string) error {
 		return runAction(ctx, cfg, args[1])
 	case "picker":
 		demo := os.Getenv("HERDR_LINEAR_DEMO") == "1" || (len(args) > 1 && args[1] == "--demo")
-		return runPicker(ctx, cfg, demo)
+		if err := runPicker(ctx, cfg, demo); err != nil {
+			return err
+		}
+		return finishSwap()
 	case "login":
 		w, err := login(ctx, cfg, cliLoginUI())
 		if err != nil {
@@ -94,6 +102,17 @@ func run(ctx context.Context, args []string) error {
 			fmt.Printf("Signed out of %s: access revoked at Linear and forgotten here.\n", strings.Join(done, ", "))
 		}
 		return err
+	case "handoff":
+		if len(args) != 2 {
+			return errors.New("handoff needs a popup")
+		}
+		return runHandoff(args[1])
+	case "tick":
+		force := len(args) > 1 && args[1] == "--force"
+		if err := tick(ctx, cfg, force); err != nil && !isQuietTickErr(err) {
+			return err
+		}
+		return nil
 	case "status":
 		return status()
 	case "kickoff":

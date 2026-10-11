@@ -1,6 +1,6 @@
 id = "herdr-linear"
 name = "Linear"
-version = "0.8.1"
+version = "0.9.0"
 min_herdr_version = "0.9.0"
 description = "Your Linear issues and projects in a herdr popup: status icons, rendered descriptions, status changes, and one key to a worktree for any issue, or to start it with /ticket in a new agent. Signs in with OAuth."
 # Tokens live in the macOS login keychain, or the Secret Service on Linux.
@@ -47,3 +47,34 @@ placement = "popup"
 width = "80%"
 height = "70%"
 command = ["./bin/herdr-linear", "picker"]
+
+# Sidebar labels. `tick` sets the $issue, $issue_state and $issue_title tokens
+# on each space and agent whose branch is named for a Linear issue
+# ("me/eng-142-fix-login"). It returns at once when it ran moments ago, and
+# only asks Linear about an issue whose answer is older than
+# label_refresh_seconds (120 by default).
+[[startup]]
+command = ["./bin/herdr-linear", "tick", "--force"]
+
+# Switching space or pane: the cheapest moment to catch up.
+[[events]]
+on = "pane.focused"
+command = ["./bin/herdr-linear", "tick"]
+
+# An agent starting or finishing is when a branch, or an issue's status, moves.
+[[events]]
+on = "pane.agent_status_changed"
+command = ["./bin/herdr-linear", "tick"]
+
+# A new space, or a worktree opened into one: label it straight away.
+[[events]]
+on = "workspace.created"
+command = ["./bin/herdr-linear", "tick"]
+
+[[events]]
+on = "worktree.created"
+command = ["./bin/herdr-linear", "tick"]
+
+[[events]]
+on = "worktree.opened"
+command = ["./bin/herdr-linear", "tick"]

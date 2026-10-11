@@ -219,7 +219,10 @@ func (m model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		is := *m.cur
 		switch k.String() {
 		case "esc", "q", "left", "h":
-			m.screen, m.err, m.flash = screenList, "", ""
+			if m.direct && (k.String() == "esc" || k.String() == "q") {
+				return m.leave() // opened on this issue: there's no list to go back to
+			}
+			m.screen, m.err, m.flash, m.direct = screenList, "", "", false
 		case "o":
 			return m, m.openURL(is.URL)
 		case "w", "enter":
@@ -493,6 +496,9 @@ func (m model) detailFooter() []hint {
 	case screenProject:
 		return []hint{{"w worktree", "w", hintAct}, {"s start", "s", hintAct}, {"c new issue", "c", hintAct}, {"i issues", "i", hintView}, {"o open in Linear", "o", hintView}, {"esc back", "esc", hintQuiet}}
 	default:
+		if m.direct {
+			return []hint{{"w worktree", "w", hintAct}, {"s start", "s", hintAct}, {"c status", "c", hintAct}, {"o open in Linear", "o", hintView}, {"← lists", "left", hintView}, {m.escLabel(), "esc", hintQuiet}}
+		}
 		return []hint{{"w worktree", "w", hintAct}, {"s start", "s", hintAct}, {"c status", "c", hintAct}, {"o open in Linear", "o", hintView}, {"y copy branch", "y", hintView}, {"esc back", "esc", hintQuiet}}
 	}
 }

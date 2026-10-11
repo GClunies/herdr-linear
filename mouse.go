@@ -139,7 +139,7 @@ func (m model) clickTab(x int) (tea.Model, tea.Cmd) {
 	if want < 0 {
 		return m, nil
 	}
-	m.screen, m.err, m.flash = screenList, "", ""
+	m.screen, m.err, m.flash, m.direct = screenList, "", "", false
 	if want != m.tab {
 		return m.switchTab(want)
 	}

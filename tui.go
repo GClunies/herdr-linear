@@ -165,16 +165,22 @@ type row struct {
 func (r row) label() bool { return r.header != "" || r.spacer }
 
 type model struct {
-	ctx       context.Context
-	cfg       config // settled for the workspace in use (forWorkspace)
-	baseCfg   config // as config.json has it
-	client    source
-	invoked   string // cwd of the space the picker was opened from
-	repo      string // the repo it's in (repoKey), which remembers its workspace
-	index     workspaceIndex
-	ws        *workspace // the workspace shown; nil until chosen
-	wsCursor  int        // on the workspace screen; len(index.Workspaces) is "sign in"
-	gen       int        // bumped on switching workspace (see issuesMsg)
+	ctx      context.Context
+	cfg      config // settled for the workspace in use (forWorkspace)
+	baseCfg  config // as config.json has it
+	client   source
+	invoked  string // cwd of the space the picker was opened from
+	repo     string // the repo it's in (repoKey), which remembers its workspace
+	index    workspaceIndex
+	ws       *workspace // the workspace shown; nil until chosen
+	wsCursor int        // on the workspace screen; len(index.Workspaces) is "sign in"
+	gen      int        // bumped on switching workspace (see issuesMsg)
+	// target is the issue the popup was opened on (HERDR_LINEAR_ISSUE), to
+	// find once there's a workspace; direct, that its screen is where the
+	// popup opened, so esc leaves; back, the popup it was opened from.
+	target    *issueRef
+	direct    bool
+	back      *popupRef
 	width     int
 	height    int
 	mode      mode
@@ -274,6 +280,9 @@ func (m model) useWorkspace(w workspace, remember bool) (model, tea.Cmd) {
 	case tabRecent:
 		cmds = append(cmds, m.loadRecent())
 	}
+	if m.target != nil {
+		cmds = append(cmds, m.findTarget(*m.target))
+	}
 	if remember && m.repo != "" {
 		ctx, repo := m.ctx, m.repo
 		m.index.remember(repo, w.ID)
@@ -285,6 +294,42 @@ func (m model) useWorkspace(w workspace, remember bool) (model, tea.Cmd) {
 		})
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// targetMsg is the issue the popup was opened on, found (or not).
+type targetMsg struct {
+	ref    issueRef
+	issues []issue
+	err    error
+	gen    int
+}
+
+func (m model) findTarget(ref issueRef) tea.Cmd {
+	client, ctx, gen := m.client, m.ctx, m.gen
+	return func() tea.Msg {
+		is, err := client.issuesByNumber(ctx, ref.Number, ref.Team)
+		return targetMsg{ref, is, err, gen}
+	}
+}
+
+// leave closes the popup (esc): for the one it was opened from, if it was.
+// Going to a worktree, or ctrl+c, just closes it.
+func (m model) leave() (tea.Model, tea.Cmd) {
+	if m.cancel != nil {
+		m.cancel()
+	}
+	if m.back != nil {
+		_ = handOver(*m.back)
+	}
+	return m, tea.Quit
+}
+
+// escLabel is what esc is said to do where it closes the popup.
+func (m model) escLabel() string {
+	if m.back != nil {
+		return "esc back"
+	}
+	return "esc close"
 }
 
 // chooseWorkspace opens the workspace screen, on the one in use.
@@ -373,6 +418,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
+
+	case targetMsg:
+		if msg.gen != m.gen || m.target == nil || *m.target != msg.ref {
+			return m, nil
+		}
+		m.target = nil
+		for _, is := range msg.issues {
+			if strings.EqualFold(is.Identifier, msg.ref.String()) {
+				m.direct = true
+				return m.openIssue(is)
+			}
+		}
+		if msg.err != nil {
+			m.err = "Couldn't open " + msg.ref.String() + ": " + msg.err.Error()
+		} else {
+			m.err = msg.ref.String() + " isn't in this workspace"
+		}
+		return m, nil
 
 	case issuesMsg:
 		if msg.gen != m.gen || m.handleLoadErr(msg.err) {
@@ -466,7 +529,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			note = "Couldn't finish moving your earlier sign-in: " + msg.err.Error()
 		}
 		var cmd tea.Cmd
-		switch w := m.index.pick(m.repo); {
+		pick := m.index.pick(m.repo)
+		if m.target != nil {
+			pick = workspaceFor(m.index, m.repo, *m.target)
+		}
+		switch w := pick; {
 		case len(m.index.Workspaces) == 0:
 			m.mode = modeSignedOut
 		case w != nil:
@@ -602,7 +669,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.chooseWorkspace(), nil
 			}
 		case "esc", "q":
-			return m, tea.Quit
+			return m.leave()
 		}
 		return m, nil
 	case modeSigningIn:
@@ -610,8 +677,11 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeChooseWorkspace:
 		return m.handleWorkspaceKey(k)
 	case modeBusy, modeLoading:
+		if m.mode == modeLoading && m.screen != screenList {
+			break // an issue opened straight away doesn't wait for the lists behind it
+		}
 		if k.String() == "esc" {
-			return m, tea.Quit
+			return m.leave()
 		}
 		// A load in flight doesn't lock the tabs; its reply still lands.
 		switch k.String() {
@@ -641,7 +711,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.drilled, m.projIss = nil, nil
 			m.cursor, m.offset = 0, 0
 		default:
-			return m, tea.Quit
+			return m.leave()
 		}
 		return m, nil
 	case "ctrl+t":
@@ -860,7 +930,7 @@ func (m model) handleWorkspaceKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.useWorkspace(m.index.Workspaces[m.wsCursor], true)
 	case "esc", "ctrl+t":
 		if m.ws == nil {
-			return m, tea.Quit
+			return m.leave()
 		}
 		if !m.loaded[m.tab] {
 			m.mode = modeLoading
@@ -1383,7 +1453,7 @@ func (m model) footer() []hint {
 	if len(m.index.Workspaces) > 1 {
 		hs = append(hs, hint{"^t workspace", "ctrl+t", hintView})
 	}
-	return append(hs, hint{"esc close", "esc", hintQuiet})
+	return append(hs, hint{m.escLabel(), "esc", hintQuiet})
 }
 
 // program lets background work (the sign-in flow) post progress to the UI.
@@ -1406,6 +1476,10 @@ func runPicker(ctx context.Context, cfg config, demo bool) error {
 		m.client = newDemoSource()
 	} else {
 		m.repo = repoKey(invoked)
+		m.back = cameFrom()
+		if ref, ok := targetIssue(); ok {
+			m.target = &ref
+		}
 	}
 	if !demo {
 		defer notePopup()()

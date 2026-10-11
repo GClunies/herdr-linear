@@ -27,7 +27,30 @@ worktree, and the issue handed to the agent that opens there.
 - Signs in with **OAuth**. No API keys to paste; tokens live in the macOS
   keychain or your Linux keyring, and refresh themselves.
 
-**Contents:** [Requirements](#requirements) ·
+## Works with the other herdr plugins
+
+This is one of three plugins that are useful alone and better together.
+Install [herdr-recap](https://github.com/mrolafsson/herdr-recap) or [herdr-github](https://github.com/mrolafsson/herdr-github) alongside it and they find each other:
+there is nothing to configure.
+
+| Plugin | What it adds to the others |
+| --- | --- |
+| [herdr-recap](https://github.com/mrolafsson/herdr-recap) | Every agent in one list. An agent's pull request and its Linear issue are links there: a click, or `ctrl+g` / `ctrl+l`, opens it in the plugin it belongs to. |
+| [herdr-github](https://github.com/mrolafsson/herdr-github) | Tags every space and agent with its branch's pull request (`#482 ✓ approved`), which Recap shows and groups its agents by. Opens straight on an agent's PR when Recap asks. |
+| **[herdr-linear](https://github.com/mrolafsson/herdr-linear)** (this one) | Tags every space and agent with the Linear issue its branch is named for (`ENG-142 In Progress`), which Recap shows. Opens straight on that issue when Recap asks. |
+
+- **Auto-discovery.** Each plugin asks herdr which others are installed and
+  enabled. A link only appears when the plugin behind it is there; without
+  it the same text is shown, as text, and its key is left out.
+- **Clickable, and there and back.** herdr shows one popup at a time, so
+  following a link turns the open popup into the other plugin's, in place and
+  without a flicker, and `esc` there brings you back to where you were.
+- **Shared look.** A title, a branch, a pull request and a key are
+  drawn the same in all three, in herdr's theme colours.
+
+See [Sidebar labels](#sidebar-labels) for the tags and [Opened on an issue](#opened-on-an-issue) for the convention behind the links.
+
+**Contents:** [Works with the other plugins](#works-with-the-other-herdr-plugins) · [Requirements](#requirements) ·
 [Install](#install) · [Try it without an account](#try-it-without-an-account) ·
 [Sign in](#sign-in) · [Use](#use) · [Worktrees](#worktrees) ·
 [Start](#start) · [Configuration](#configuration) ·
@@ -421,6 +444,50 @@ filled in; the same caution applies to `{name}` as to `{title}`). Nothing
 changes in Linear: moving a whole project along is a bigger step than starting
 one issue, so that stays yours.
 
+## Sidebar labels
+
+The plugin tags each space, and each agent, with the Linear issue its branch
+is named for, as herdr tokens:
+
+| token          | e.g.                     |
+|----------------|--------------------------|
+| `$issue`       | `ENG-142`                |
+| `$issue_state` | `In Progress`            |
+| `$issue_title` | `Fix the login redirect` |
+
+herdr only shows tokens you ask for, so add them to your sidebar rows in
+`~/.config/herdr/config.toml`:
+
+```toml
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", "terminal_title_stripped"],
+  [{ token = "$issue", dim = true }, { token = "$issue_state", dim = true }, "workspace"],
+]
+```
+
+[herdr-recap](https://github.com/mrolafsson/herdr-recap) lists them with each
+agent by itself, and a click on one there opens the issue here.
+
+A branch is an issue's when it has the issue's identifier in it, as the
+branch names Linear suggests do (`me/eng-142-fix-login`), and only when one
+of your workspaces has a team by that key: `utf-8` and `step-2` are nobody's.
+An agent goes by the branch of the folder it runs in. With more than one
+workspace, the repo's own is asked (the one you picked for it in the popup),
+or else the only one with that team.
+
+The labels refresh on herdr's events (a pane focused, an agent starting or
+stopping, a new space) and Linear is asked about an issue at most every
+`label_refresh_seconds`. `"labels": false` turns them off and clears them.
+
+### Opened on an issue
+
+Another plugin can open this popup straight on an issue: `HERDR_LINEAR_ISSUE`
+is its identifier, and `HERDR_POPUP_RETURN` the popup to open again on `esc`,
+as JSON in the shape of herdr's `plugin.pane.open`
+(`{"plugin_id", "entrypoint", "width", "height", "env"}`). That's how
+herdr-recap opens an agent's issue, and comes back.
+
 ## Configuration
 
 Everything is optional. Create `config.json` in the plugin's config directory:
@@ -448,6 +515,8 @@ herdr plugin config-dir herdr-linear
 | `project_start_prompt` | `Work on the Linear project at {url}` | What starting a project types into its new worktree's agent. `{name}`, `{url}` are filled in. |
 | `agent_wait_seconds` | `90`                       | How long **start** waits for that agent to be ready.                                             |
 | `token_store`        | `auto`                     | Linux: where the sign-in is kept. `auto`, `keyring` or `file`: see [Tokens in a file](#tokens-in-a-file). macOS always uses the keychain. |
+| `labels`             | `true`                     | The [sidebar labels](#sidebar-labels): `$issue`, `$issue_state`, `$issue_title` on each space and agent. `false` turns them off. |
+| `label_refresh_seconds` | `120`                   | How old an issue's status may get before Linear is asked again.                                  |
 | `theme`              | asks the terminal          | `dark` or `light`, if the automatic choice is wrong: the base for rendered Markdown, and which of herdr's themes applies when herdr's `auto_switch` is on. |
 | `client_id`          | this plugin's OAuth app    | Use your own Linear OAuth app instead; see below.                                                |
 
@@ -530,7 +599,9 @@ and no telemetry. The **start** prompt goes to the agent in your own terminal.
 
 **What's read.** Your assigned issues, active projects and their issues, and
 the details of whatever you open: descriptions, labels, cycles, workflow
-states. **What's written:** an issue's status, and its assignee when **start**
+states. For the sidebar labels: your teams' keys, and the identifier, title
+and status of the issues your branches are named for, which are kept in the
+plugin's state directory and shown by herdr. **What's written:** an issue's status, and its assignee when **start**
 claims an unowned issue. Nothing else is ever changed.
 
 **Sign-in.** OAuth 2.0 authorization code flow with PKCE (S256):

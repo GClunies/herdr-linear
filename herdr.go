@@ -84,15 +84,29 @@ func notify(title, body string) {
 }
 
 type paneInfo struct {
-	PaneID      string `json:"pane_id"`
-	WorkspaceID string `json:"workspace_id"`
-	Agent       string `json:"agent"`
-	AgentStatus string `json:"agent_status"`
+	PaneID      string            `json:"pane_id"`
+	WorkspaceID string            `json:"workspace_id"`
+	Agent       string            `json:"agent"`
+	AgentStatus string            `json:"agent_status"`
+	Cwd         string            `json:"cwd"`
+	Tokens      map[string]string `json:"tokens"`
 }
 
 type workspaceInfo struct {
-	WorkspaceID string `json:"workspace_id"`
-	Label       string `json:"label"`
+	WorkspaceID string            `json:"workspace_id"`
+	Label       string            `json:"label"`
+	Tokens      map[string]string `json:"tokens"`
+	Worktree    *struct {
+		CheckoutPath string `json:"checkout_path"`
+	} `json:"worktree"`
+}
+
+func listWorkspaces() ([]workspaceInfo, error) {
+	var res struct {
+		Workspaces []workspaceInfo `json:"workspaces"`
+	}
+	err := herdrCall("workspace.list", nil, &res)
+	return res.Workspaces, err
 }
 
 type worktreeInfo struct {
@@ -121,7 +135,11 @@ func listPanes(workspaceID string) ([]paneInfo, error) {
 	var res struct {
 		Panes []paneInfo `json:"panes"`
 	}
-	err := herdrCall("pane.list", map[string]any{"workspace_id": workspaceID}, &res)
+	params := map[string]any{}
+	if workspaceID != "" {
+		params["workspace_id"] = workspaceID
+	}
+	err := herdrCall("pane.list", params, &res)
 	return res.Panes, err
 }
 

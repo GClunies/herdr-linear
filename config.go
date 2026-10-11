@@ -37,7 +37,15 @@ type config struct {
 	// keyring, or a file when there's no Secret Service), "keyring" or "file".
 	// macOS always uses the keychain.
 	TokenStore string `json:"token_store"`
+	// Labels turns the sidebar tokens ($issue, $issue_state, $issue_title)
+	// on or off.
+	Labels *bool `json:"labels"`
+	// LabelRefreshSeconds is how old an issue's status may get before a
+	// tick asks Linear again.
+	LabelRefreshSeconds int `json:"label_refresh_seconds"`
 }
+
+func (c config) labelsOn() bool { return c.Labels == nil || *c.Labels }
 
 // tokenStore is config's TokenStore, set once it's read, for the token
 // storage, which is reached from everywhere without the config.
@@ -116,6 +124,9 @@ func withDefaults(cfg config) config {
 	}
 	if cfg.AgentWaitSeconds <= 0 {
 		cfg.AgentWaitSeconds = 90
+	}
+	if cfg.LabelRefreshSeconds <= 0 {
+		cfg.LabelRefreshSeconds = 120
 	}
 	for k, v := range cfg.Repos {
 		cfg.Repos[k] = expandHome(v)

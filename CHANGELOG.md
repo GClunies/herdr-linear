@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0 — 2026-10-11
+
+- **Spaces and agents are tagged with their Linear issue.** A branch named
+  for an issue (`me/eng-142-fix-login`) puts `$issue`, `$issue_state` and
+  `$issue_title` on its space and on the agents working in it, as herdr
+  tokens for your sidebar rows; herdr-recap shows them with each agent. Only
+  identifiers of teams you have count, so `utf-8` isn't an issue.
+  `"labels": false` turns it off. See *Sidebar labels* in the README.
+- **The popup opens straight on an issue** when another plugin asks
+  (`HERDR_LINEAR_ISSUE`), and `esc` goes back to the popup it came from:
+  that's a click on an agent's issue in herdr-recap.
+
 ## 0.8.1 — 2026-10-10
 
 - The Created tab is now called **Recent**.
