@@ -17,7 +17,12 @@ mkdir -p bin
 if [ "${HERDR_LINEAR_PREBUILT:-}" != 1 ] && command -v go >/dev/null 2>&1; then
 	echo "herdr-linear: building from source…" >&2
 	# go.mod's toolchain line makes an older Go fetch the patched one first.
-	exec go build -trimpath -ldflags "-s -w" -o bin/herdr-linear .
+	go build -trimpath -ldflags "-s -w" -o bin/herdr-linear . && exit 0
+	# A vendor/ left by an old `go mod vendor` goes stale when the imports
+	# change, and Go then refuses to look anywhere else.
+	[ -d vendor ] || exit 1
+	echo "herdr-linear: vendor/ is out of date; building from the module cache instead…" >&2
+	exec go build -mod=mod -trimpath -ldflags "-s -w" -o bin/herdr-linear .
 fi
 
 # The release that matches this checkout: the manifest's version.
