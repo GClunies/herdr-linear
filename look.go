@@ -8,9 +8,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// The look the herdr plugins share. herdr-github, herdr-linear and
-// herdr-recap keep this file the same, so that a title, a branch, a pull
-// request or a key is drawn alike in all three:
+// The look the herdr plugins share. herdr-github, herdr-linear,
+// herdr-recap and herdr-snooze keep this file the same, so that a title, a
+// branch, a pull request or a key is drawn alike in all of them:
 //
 //	title    the theme's text at its brightest; bold where it heads a card
 //	         or a screen, plain where it's one row among many

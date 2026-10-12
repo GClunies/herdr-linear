@@ -10,6 +10,22 @@ set -eu
 cd "$(dirname "$0")/.."
 
 command -v freeze >/dev/null 2>&1 || { echo "needs freeze: brew install charmbracelet/tap/freeze" >&2; exit 1; }
+# freeze draws PNGs itself unless rsvg-convert is on the PATH, and its own
+# renderer draws an emoji (Snooze's 💤) as an empty box. rsvg-convert draws
+# with the system's fonts, so those must have the README's font and an emoji
+# one: without them the pictures would quietly come out wrong, so stop here.
+missing=""
+command -v rsvg-convert >/dev/null 2>&1 || missing="$missing rsvg-convert"
+if command -v fc-list >/dev/null 2>&1; then
+	fc-list | grep -qi "JetBrains Mono" || missing="$missing JetBrains-Mono"
+	fc-list | grep -qi "emoji" || missing="$missing an-emoji-font"
+fi
+if [ -n "$missing" ]; then
+	echo "screenshots need:$missing" >&2
+	echo "  macOS:  brew install librsvg && brew install --cask font-jetbrains-mono" >&2
+	echo "  Debian/Ubuntu:  sudo apt install librsvg2-bin fonts-jetbrains-mono fonts-noto-color-emoji" >&2
+	exit 1
+fi
 # freeze renders at 2x; 1800px wide is still sharp on a Retina README. sips is
 # macOS's; elsewhere ImageMagick does it, and without either the PNGs are
 # left at freeze's size.
