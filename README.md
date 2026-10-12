@@ -9,8 +9,8 @@ worktree, and the issue handed to the agent that opens there.
 ![The picker, on the built-in demo workspace](docs/images/issues.png)
 
 - **My issues** grouped by status, with Linear's status icons in each state's
-  own colour. Work in flight comes first, urgent issues are flagged, and a `⌥`
-  marks issues that already have a worktree.
+  own colour, under headings with counts. Work in flight comes first, and
+  each issue says at its edge if it's urgent and if it already has a worktree.
 - **Issue screen**: status, priority, project, assignee, labels, cycle, due
   date, branch, and the description rendered as Markdown.
 - **Change status** from the team's own workflow states.
@@ -210,8 +210,15 @@ Within a group, higher priority comes first.
 - The status icon is Linear's, in the state's colour: `◇` triage, `◌` backlog,
   `○` todo, `◔` in progress, `◕` in review: the circle fills up as the work
   moves along.
-- `!` marks **urgent**.
-- The project is on the right; `⌥` means the issue's worktree already exists.
+- Each status is a heading in its colour, with how many issues it has. The
+  heading of the group you've scrolled into stays at the top of the list.
+- At the right edge: **urgent**, the project, and **worktree** if the issue's
+  worktree already exists. In a narrow popup the title keeps its room and the
+  edge gives way, the project first.
+- The line above the keys has the selected issue's priority and its branch.
+- The tabs along the top say how many each lists.
+- The selection starts on the top row and stays there while the lists load;
+  once you've moved it, a refresh (`ctrl+r`) keeps it on the issue you picked.
 
 **Type to filter.** Every word must match somewhere in the identifier, title,
 status or project, so `search acc` finds *Search index drops accents*.
@@ -256,8 +263,9 @@ and the error is shown.
 ### Projects
 
 Tab (or →) switches to projects: active projects, grouped by status like your
-issues, the ones you lead first in each group (`◆`), each with how far along it
-is and `⌥` if it has a worktree.
+issues, the ones you lead first in each group (*you lead*), each with how far
+along it is and *worktree* if it has one. The line above the keys has the
+selected project's target date and its branch.
 
 ![Projects](docs/images/projects.png)
 
@@ -566,7 +574,7 @@ accent = "#f5c2e7"
 
 It resolves the theme the way herdr does, aliases and fallbacks included, so a
 name herdr doesn't know means herdr's default, catppuccin. The accent colours
-tabs, hints, headings and the `⌥` marker; the selection, dim text, errors,
+tabs, hints and the *worktree* marker; the selection, dim text, errors,
 urgent flags, and Markdown text, inline code, links and quotes take their
 tokens too (code blocks keep their syntax colours). A colour set to `reset` is
 your terminal's own. Status icons and labels keep Linear's colours, so a state

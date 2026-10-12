@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- **The lists, laid out as herdr-github's and herdr-recap's are**, an issue
+  still to a line. The header names the popup and shows the tab as a pill,
+  each tab with how many it lists; too wide for the popup, the name goes,
+  then *My issues* shortens to *Mine*. The filter lines up with the rows and
+  says how to change tabs.
+- **Status headings in the status's colour, with counts**, the current one
+  kept at the top while scrolling.
+- **A row says things in words**: *urgent*, *worktree* and *you lead* in
+  place of `!`, `⌥` and `◆`. Identifiers are padded to the longest listed,
+  not to nine cells. In a narrow popup the title keeps its room and the edge
+  gives way a piece at a time (the project first), where it used to go all
+  at once; long project and assignee names are cut short.
+- The line above the keys has the selected issue's priority and branch, or
+  the selected project's target date and branch.
+- **The selection stays on the top row until you pick one**, whatever the
+  lists do as they load; after that a refresh keeps it on your pick.
+- `esc` says what it will do (*clear*, *back*, *close*); an empty list says
+  why it's empty; PgUp/PgDn move by what's on screen.
+
 ## 0.9.0 — 2026-10-11
 
 - **Spaces and agents are tagged with their Linear issue.** A branch named

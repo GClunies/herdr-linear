@@ -258,7 +258,7 @@ func (m model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.screen = screenList
 			m.drilled, m.projIss = &p, nil
 			m.filter.SetValue("")
-			m.cursor, m.offset, m.mode = 0, 0, modeLoading
+			m.cursor, m.offset, m.chose, m.mode = 0, 0, false, modeLoading
 			return m, tea.Batch(m.spin.Tick, m.loadProjectIssues(p))
 		}
 		return m, nil

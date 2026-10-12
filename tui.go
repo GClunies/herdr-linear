@@ -155,14 +155,19 @@ func colored(glyph, hex string) string {
 // ── model ─────────────────────────────────────────────────────────────────────
 
 type row struct {
-	header  string // non-empty: a group heading, not selectable
-	spacer  bool   // the blank line above a heading, not selectable
 	issue   *issue
 	project *project
+	group   string // the heading it's listed under (its status); "" for none
+	hue     string // the heading's colour: the status's own
 }
 
-// label rows are there to be read, never selected.
-func (r row) label() bool { return r.header != "" || r.spacer }
+// key names a row's issue or project, to find it again in a fresher list.
+func (r row) key() string {
+	if r.issue != nil {
+		return r.issue.ID
+	}
+	return r.project.ID
+}
 
 type model struct {
 	ctx      context.Context
@@ -198,6 +203,9 @@ type model struct {
 	worktrees map[string]bool
 	cursor    int
 	offset    int
+	// chose: you put the cursor where it is. Until then it stays on the top
+	// row, whatever a fresher list puts there; after, it follows your pick.
+	chose     bool
 	lookup    []issue            // issues found by number, for lookupFor
 	lookupFor string             // the number (or identifier) they were found for
 	lookingUp string             // the one being looked up, if any
@@ -232,8 +240,9 @@ type model struct {
 
 func newModel(ctx context.Context, cfg config, invoked string) model {
 	ti := textinput.New()
-	ti.Prompt = "› "
-	ti.Placeholder = "filter"
+	ti.Prompt = " › "
+	ti.Placeholder = "Type to filter… ← → to change tabs"
+	ti.PromptStyle, ti.PlaceholderStyle = styleDim, styleDim
 	ti.Focus()
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
@@ -269,7 +278,7 @@ func (m model) useWorkspace(w workspace, remember bool) (model, tea.Cmd) {
 	m.issues, m.projects, m.recent, m.drilled, m.projIss = nil, nil, nil, nil, nil
 	m.lookup, m.lookupFor, m.lookingUp = nil, "", ""
 	m.loaded, m.states = map[tab]bool{}, map[string][]workflowState{}
-	m.screen, m.cursor, m.offset, m.err, m.flash = screenList, 0, 0, "", ""
+	m.screen, m.cursor, m.offset, m.chose, m.err, m.flash = screenList, 0, 0, false, "", ""
 	m.cur, m.curDetail, m.curProject, m.projDetail = nil, nil, nil, nil
 	m.form, m.created, m.teamList = issueForm{}, nil, nil
 	m.mode = modeLoading
@@ -441,27 +450,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != m.gen || m.handleLoadErr(msg.err) {
 			return m, nil
 		}
+		key := m.selectedKey()
 		m.issues, m.loaded[tabMine] = msg.issues, true
 		m.doneLoading()
-		m.clampCursor()
+		m.reselect(key)
 		return m, nil
 
 	case recentMsg:
 		if msg.gen != m.gen || m.handleLoadErr(msg.err) {
 			return m, nil
 		}
+		key := m.selectedKey()
 		m.recent, m.loaded[tabRecent] = msg.issues, true
 		m.doneLoading()
-		m.clampCursor()
+		m.reselect(key)
 		return m, nil
 
 	case projectsMsg:
 		if msg.gen != m.gen || m.handleLoadErr(msg.err) {
 			return m, nil
 		}
+		key := m.selectedKey()
 		m.projects, m.loaded[tabProjects] = msg.projects, true
 		m.doneLoading()
-		m.clampCursor()
+		m.reselect(key)
 		return m, nil
 
 	case projectIssuesMsg:
@@ -469,10 +481,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.drilled != nil && m.drilled.ID == msg.projectID {
+			key := m.selectedKey()
 			m.projIss = msg.issues
 			m.doneLoading()
-			m.cursor, m.offset = 0, 0
-			m.clampCursor()
+			m.reselect(key)
 		}
 		return m, nil
 
@@ -706,10 +718,10 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch {
 		case m.filter.Value() != "":
 			m.filter.SetValue("")
-			m.cursor, m.offset = 0, 0
+			m.cursor, m.offset, m.chose = 0, 0, false
 		case m.drilled != nil:
 			m.drilled, m.projIss = nil, nil
-			m.cursor, m.offset = 0, 0
+			m.cursor, m.offset, m.chose = 0, 0, false
 		default:
 			return m.leave()
 		}
@@ -734,7 +746,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch {
 		case k.String() == "left" && m.drilled != nil:
 			m.drilled, m.projIss = nil, nil
-			m.cursor, m.offset = 0, 0
+			m.cursor, m.offset, m.chose = 0, 0, false
 			m.clampCursor()
 		case k.String() == "right" && m.tab < tabCount-1:
 			return m.switchTab(m.tab + 1)
@@ -749,10 +761,10 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.move(1)
 		return m, nil
 	case "pgup":
-		m.move(-m.listHeight())
+		m.move(-m.visibleRows())
 		return m, nil
 	case "pgdown":
-		m.move(m.listHeight())
+		m.move(m.visibleRows())
 		return m, nil
 	case "ctrl+r":
 		m.err = ""
@@ -794,7 +806,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.filter, cmd = m.filter.Update(k)
 	if m.filter.Value() != prev {
-		m.cursor, m.offset = 0, 0
+		m.cursor, m.offset, m.chose = 0, 0, false
 		m.clampCursor()
 		return m, tea.Batch(cmd, m.startLookup())
 	}
@@ -804,7 +816,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // switchTab shows tab t's list, loading it the first time.
 func (m model) switchTab(t tab) (tea.Model, tea.Cmd) {
 	m.drilled, m.projIss, m.err = nil, nil, ""
-	m.tab, m.cursor, m.offset = t, 0, 0
+	m.tab, m.cursor, m.offset, m.chose = t, 0, 0, false
 	if !m.loaded[m.tab] {
 		m.mode = modeLoading
 		return m, m.reload()
@@ -1001,22 +1013,11 @@ func (m model) runProjectStart(p project) (tea.Model, tea.Cmd) {
 func (m model) rows() []row {
 	q := m.filter.Value()
 	var rows []row
-	// Both lists come grouped by status: a heading starts each group.
-	last := ""
-	group := func(status string) {
-		if status != last {
-			if len(rows) > 0 {
-				rows = append(rows, row{spacer: true})
-			}
-			rows = append(rows, row{header: status})
-			last = status
-		}
-	}
 	addIssues := func(list []issue) {
 		for i := range list {
 			if is := &list[i]; is.matches(q) {
-				group(is.State.Name)
-				rows = append(rows, row{issue: is})
+				// Both lists come sorted by status: each is a group.
+				rows = append(rows, row{issue: is, group: is.State.Name, hue: is.State.Color})
 			}
 		}
 	}
@@ -1037,24 +1038,16 @@ func (m model) rows() []row {
 			for _, is := range m.issues {
 				mine[is.ID] = true
 			}
-			heading := false
 			for i := range m.lookup {
 				if is := &m.lookup[i]; !mine[is.ID] {
-					if !heading {
-						if len(rows) > 0 {
-							rows = append(rows, row{spacer: true})
-						}
-						rows, heading = append(rows, row{header: "Not in your issues"}), true
-					}
-					rows = append(rows, row{issue: is})
+					rows = append(rows, row{issue: is, group: "Not in your issues"})
 				}
 			}
 		}
 	default:
 		for i := range m.projects {
 			if p := &m.projects[i]; p.matches(q) {
-				group(p.Status.Name)
-				rows = append(rows, row{project: p})
+				rows = append(rows, row{project: p, group: p.Status.Name, hue: p.Status.Color})
 			}
 		}
 	}
@@ -1063,10 +1056,40 @@ func (m model) rows() []row {
 
 func (m model) selected() *row {
 	rows := m.rows()
-	if m.cursor >= 0 && m.cursor < len(rows) && !rows[m.cursor].label() {
+	if m.cursor >= 0 && m.cursor < len(rows) {
 		return &rows[m.cursor]
 	}
 	return nil
+}
+
+// selectedKey is the row you put the cursor on, if you did (row.key).
+func (m model) selectedKey() string {
+	if r := m.selected(); r != nil && m.chose {
+		return r.key()
+	}
+	return ""
+}
+
+// reselect puts the cursor back on the row it was on (selectedKey) once a
+// fresher list has moved it; on the top row if you hadn't picked one, or
+// it's gone.
+func (m *model) reselect(key string) {
+	if key == "" {
+		if !m.chose {
+			m.cursor, m.offset = 0, 0
+		}
+		m.clampCursor()
+		return
+	}
+	for i, r := range m.rows() {
+		if r.key() == key {
+			m.cursor = i
+			m.scrollTo()
+			return
+		}
+	}
+	m.cursor, m.offset, m.chose = 0, 0, false
+	m.clampCursor()
 }
 
 func (m *model) move(delta int) {
@@ -1074,56 +1097,108 @@ func (m *model) move(delta int) {
 	if len(rows) == 0 {
 		return
 	}
-	step := 1
-	if delta < 0 {
-		step = -1
-	}
-	c := m.cursor + delta
-	c = min(max(c, 0), len(rows)-1)
-	// Skip headings and spacers, in the direction of travel, then back if we ran off.
-	for c >= 0 && c < len(rows) && rows[c].label() {
-		c += step
-	}
-	if c < 0 || c >= len(rows) {
-		c = m.cursor
-	}
-	m.cursor = c
+	m.cursor, m.chose = min(max(m.cursor+delta, 0), len(rows)-1), true
 	m.scrollTo()
 }
 
 func (m *model) clampCursor() {
-	rows := m.rows()
-	if m.cursor >= len(rows) {
-		m.cursor = len(rows) - 1
-	}
-	if m.cursor < 0 {
-		m.cursor = 0
-	}
-	for m.cursor < len(rows) && rows[m.cursor].label() {
-		m.cursor++
-	}
+	m.cursor = max(0, min(m.cursor, len(m.rows())-1))
 	m.scrollTo()
 }
 
-func (m *model) scrollTo() {
-	h := m.listHeight()
-	if m.cursor < m.offset {
-		m.offset = m.cursor
-		// Keep the group heading above the first row visible.
-		if m.offset > 0 {
-			if rows := m.rows(); rows[m.offset-1].header != "" {
-				m.offset--
-			}
+// headed is whether the i-th row has its group's heading above it: the
+// first of each group, and whichever row the list is scrolled to, so the top
+// of the list always says what it's showing.
+func (m model) headed(rows []row, i int) bool {
+	if rows[i].group == "" {
+		return false
+	}
+	return i == 0 || i == m.offset || rows[i-1].group != rows[i].group
+}
+
+// headingHeight is the lines the i-th row's heading takes: the heading, and
+// a blank above it unless it's the top of the list; or none.
+func (m model) headingHeight(rows []row, i int) int {
+	switch {
+	case !m.headed(rows, i):
+		return 0
+	case i == m.offset:
+		return 1
+	}
+	return 2
+}
+
+// viewHeading is a group's heading: its name in its status's colour, and
+// how many are listed in it.
+func (m model) viewHeading(rows []row, r row) string {
+	n := 0
+	for _, o := range rows {
+		if o.group == r.group {
+			n++
 		}
 	}
-	if m.cursor >= m.offset+h {
-		m.offset = m.cursor - h + 1
+	name := styleHeader
+	if r.hue != "" {
+		name = lipgloss.NewStyle().Foreground(lipgloss.Color(r.hue)).Bold(true)
 	}
+	return " " + name.Render(shorten(r.group, max(1, m.width-8))) + styleDim.Render(" "+strconv.Itoa(n))
+}
+
+// scrollTo keeps the selected row on screen, heading and all.
+func (m *model) scrollTo() {
+	rows := m.rows()
+	if m.cursor < m.offset {
+		m.offset = m.cursor
+	}
+	for m.offset < m.cursor && m.cursor < len(rows) {
+		used := 0
+		for i := m.offset; i <= m.cursor; i++ {
+			used += m.headingHeight(rows, i) + 1
+		}
+		if used <= m.listHeight() {
+			break
+		}
+		m.offset++
+	}
+	m.offset = max(0, min(m.offset, len(rows)-1))
+}
+
+// visibleRows is how many rows fit from the offset: a page.
+func (m model) visibleRows() int {
+	rows := m.rows()
+	n, used := 0, 0
+	for i := m.offset; i < len(rows); i++ {
+		used += m.headingHeight(rows, i) + 1
+		if used > m.listHeight() {
+			break
+		}
+		n++
+	}
+	return max(1, n)
+}
+
+// rowAt is the row drawn on screen line y, if any: a heading isn't one.
+func (m model) rowAt(y int) (int, bool) {
+	if m.screen != screenList {
+		return 0, false
+	}
+	rows := m.rows()
+	top, end := listTop, listTop+m.listHeight()
+	for i := m.offset; i < len(rows); i++ {
+		if top += m.headingHeight(rows, i); top >= end {
+			break
+		}
+		if y == top {
+			return i, true
+		}
+		top++
+	}
+	return 0, false
 }
 
 func (m model) listHeight() int {
-	// tabs + filter + blank above; status line + footer below, the footer on
-	// the popup's last line (mouse.go counts on that).
+	// tabs + blank + filter + blank above; status line + footer below, the
+	// footer on the popup's last line (mouse.go counts on that).
 	return max(3, m.height-listTop-2)
 }
 
@@ -1187,30 +1262,56 @@ func (m model) view() string {
 		return b.String()
 	}
 
-	b.WriteString(m.filter.View() + "\n\n")
+	b.WriteString("\n" + m.filter.View() + "\n\n")
 	rows := m.rows()
-	h := m.listHeight()
-	switch {
-	case m.mode == modeLoading && len(rows) == 0:
-		b.WriteString("  " + m.spin.View() + " Loading…\n")
-		h--
-	case len(rows) == 0 && m.lookingUp != "":
-		b.WriteString(styleDim.Render("  Looking up "+m.lookingUp+"…") + "\n")
-		h--
-	case len(rows) == 0:
-		b.WriteString(styleDim.Render("  Nothing here.") + "\n")
-		h--
-	}
-	for i := m.offset; i < len(rows) && i < m.offset+h; i++ {
+	h, used := m.listHeight(), 0
+	for i := m.offset; i < len(rows); i++ {
+		// A heading with no room for a row under it says nothing.
+		if used+m.headingHeight(rows, i) >= h {
+			break
+		}
+		if m.headed(rows, i) {
+			if i != m.offset {
+				b.WriteString("\n")
+			}
+			b.WriteString(m.viewHeading(rows, rows[i]) + "\n")
+		}
 		b.WriteString(m.viewRow(rows[i], i == m.cursor) + "\n")
+		used += m.headingHeight(rows, i) + 1
 	}
-	for i := len(rows) - m.offset; i < h; i++ {
+	if len(rows) == 0 {
+		switch {
+		case m.mode == modeLoading:
+			b.WriteString("  " + m.spin.View() + " Loading…\n")
+		case m.lookingUp != "":
+			b.WriteString(styleDim.Render("  Looking up "+m.lookingUp+"…") + "\n")
+		default:
+			b.WriteString(styleDim.Render("  "+m.emptyText()) + "\n")
+		}
+		used++
+	}
+	for ; used < h; used++ {
 		b.WriteString("\n")
 	}
 
 	b.WriteString(m.statusLine())
 	b.WriteString(m.renderFooter(m.footer()))
 	return b.String()
+}
+
+// emptyText says why a list has nothing in it.
+func (m model) emptyText() string {
+	switch {
+	case m.filter.Value() != "":
+		return "Nothing matches."
+	case m.drilled != nil:
+		return "No open issues in this project. ctrl+c adds one."
+	case m.tab == tabProjects:
+		return "No projects under way."
+	case m.tab == tabRecent:
+		return "You haven't created an issue lately. ctrl+c adds one."
+	}
+	return "No open issues assigned to you."
 }
 
 // statusLine is the one line above the footer: work in progress, the last
@@ -1223,8 +1324,35 @@ func (m model) statusLine() string {
 		return " " + styleErr.Render(shorten(clean(m.err, false), max(10, m.width-2))) + "\n"
 	case m.flash != "":
 		return " " + styleOK.Render("✓ ") + shorten(clean(m.flash, false), max(10, m.width-4)) + "\n"
+	case m.screen == screenList && m.mode == modeList:
+		return m.about() + "\n"
 	}
 	return "\n"
+}
+
+// about is what a row has no room for, of the selected one, for the status
+// line: an issue's priority, with its branch on the right; a project's
+// target date. Selecting a row doesn't change its height.
+func (m model) about() string {
+	r := m.selected()
+	if r == nil {
+		return ""
+	}
+	left, branch := "", ""
+	if is := r.issue; is != nil {
+		branch = issueTarget(*is).Branch
+		if is.Priority > 1 && is.Priority < len(priorityNames) {
+			left = priorityNames[is.Priority] + " priority"
+		}
+	} else {
+		branch = projectTarget(*r.project).Branch
+		if r.project.TargetDate != "" {
+			left = "Target " + r.project.TargetDate
+		}
+	}
+	right := styleBranch.Render(shorten(branch, max(1, min(48, m.width/2))))
+	left = styleDim.Render(shorten(left, max(1, m.width-lipgloss.Width(right)-4)))
+	return " " + left + strings.Repeat(" ", max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right)-2)) + right
 }
 
 // viewSigningIn keeps the link on screen for the whole sign-in: opened in a
@@ -1318,23 +1446,74 @@ func (m model) viewWorkspaces() string {
 	return b.String()
 }
 
-// tabNames are the tabs as drawn, in order (mouse.go finds them by these).
-var tabNames = [tabCount]string{" My issues ", " Projects ", " Recent "}
+// tabCell is one tab along the top, and the cells it's drawn in (x0 up to
+// x1), for the mouse.
+type tabCell struct {
+	tab    tab
+	x0, x1 int
+}
 
-func (m model) viewTabs() string {
-	on := m.tab
-	if m.drilled != nil {
-		on = tabProjects
+// tabName is a tab's name; short, for a popup too narrow for it in full.
+func tabName(t tab, short bool) string {
+	switch {
+	case t == tabProjects:
+		return "Projects"
+	case t == tabRecent:
+		return "Recent"
+	case short:
+		return "Mine"
 	}
-	var names []string
-	for t, name := range tabNames {
-		if tab(t) == on {
-			names = append(names, styleTabOn.Render(name))
-		} else {
-			names = append(names, styleDim.Render(name))
+	return "My issues"
+}
+
+// tabSize is how many tab t lists, once it has loaded.
+func (m model) tabSize(t tab) (int, bool) {
+	switch t {
+	case tabProjects:
+		return len(m.projects), m.loaded[t]
+	case tabRecent:
+		return len(m.recent), m.loaded[t]
+	}
+	return len(m.issues), m.loaded[t]
+}
+
+// tabBar is the popup's first line: its name, then the tabs, each with how
+// many it lists, the one shown as a pill. Too wide for the popup, the name
+// goes, then the labels shorten. On an issue's or a project's screen no tab
+// is the one shown: they're the way back.
+func (m model) tabBar() (string, []tabCell) {
+	cells := []tabCell{{tab: tabMine}, {tab: tabProjects}, {tab: tabRecent}}
+	var line string
+	for _, form := range []struct{ name, short bool }{{true, false}, {false, false}, {false, true}} {
+		line = ""
+		if form.name {
+			line = styleHeader.Render(" Linear ") + " "
+		}
+		x := lipgloss.Width(line)
+		for i, c := range cells {
+			label, n := tabName(c.tab, form.short), ""
+			if size, ok := m.tabSize(c.tab); ok {
+				n = " " + strconv.Itoa(size)
+			}
+			cell := " " + styleText.Render(label) + styleDim.Render(n) + " "
+			if c.tab == m.tab && m.screen == screenList {
+				cell = pill(look.Accent, label+n)
+			}
+			line += cell
+			cells[i].x0, cells[i].x1 = x, x+lipgloss.Width(cell)
+			x = cells[i].x1
+		}
+		if x <= m.width {
+			break
 		}
 	}
-	line := strings.Join(names, " ")
+	return line, cells
+}
+
+// viewTabs is the tab bar, with where you are past the lists, and on the
+// right the workspace, when there's more than one to be in.
+func (m model) viewTabs() string {
+	line, _ := m.tabBar()
 	switch {
 	case m.screen == screenCreate:
 		line += styleDim.Render(" › ") + styleHeader.Render("New issue")
@@ -1348,78 +1527,126 @@ func (m model) viewTabs() string {
 		}
 		line += styleDim.Render(" › ") + styleHeader.Render(m.cur.Identifier)
 	case m.drilled != nil:
-		line += styleDim.Render(" › ") + styleHeader.Render(m.drilled.Name)
+		line += styleDim.Render(" › ") + styleHeader.Render(shorten(m.drilled.Name, 40))
 	}
-	// With more than one workspace, say which this is, on the right.
+	tag := ""
 	if m.ws != nil && len(m.index.Workspaces) > 1 {
-		name := styleDim.Render(shorten(m.ws.Name, 24) + " ")
-		if pad := m.width - lipgloss.Width(line) - lipgloss.Width(name); pad > 1 {
-			line += strings.Repeat(" ", pad) + name
-		}
+		tag = styleDim.Render(shorten(m.ws.Name, 24) + " ")
+	} else if _, demo := m.client.(*demoSource); demo {
+		tag = styleDim.Render("demo ")
+	}
+	if pad := m.width - lipgloss.Width(line) - lipgloss.Width(tag); tag != "" && pad > 1 {
+		line += strings.Repeat(" ", pad) + tag
+	}
+	return ansi.Truncate(line, m.width, "") // narrower than the tabs at their shortest
+}
+
+// viewRow is a row's one line: there are too many issues for two. Its mark
+// and identifier wear its status's colour (they read as one, as a PR's
+// number does), then its title, and at the edge what there is to say of it,
+// in words.
+func (m model) viewRow(r row, selected bool) string {
+	var line string
+	if is := r.issue; is != nil {
+		left := " " + colored(stateIcon(is.State), is.State.Color) + " " + colored(is.Identifier, is.State.Color) +
+			strings.Repeat(" ", max(0, m.idWidth()-len(is.Identifier))) + " "
+		line = fitRow(left, is.Title, m.issueMeta(is), m.width)
+	} else {
+		p := r.project
+		line = fitRow(" "+colored(projectIcon(p.Status.Type), p.Status.Color)+" ", p.Name, m.projectMeta(p), m.width)
+	}
+	if selected {
+		return highlight(line, m.width)
 	}
 	return line
 }
 
-func (m model) viewRow(r row, selected bool) string {
-	w := m.width
-	if r.spacer {
-		return ""
-	}
-	if r.header != "" {
-		return styleDim.Render("  " + r.header)
-	}
-	var left, right string
-	if r.issue != nil {
-		is := r.issue
-		urgent := " "
-		if is.Priority == 1 {
-			urgent = styleUrgent.Render("!")
+// idWidth is the width of the longest identifier listed, so titles line up.
+func (m model) idWidth() int {
+	n := 1
+	for _, r := range m.rows() {
+		if r.issue != nil {
+			n = max(n, len(r.issue.Identifier))
 		}
-		// The identifier wears its state's colour, like its mark: they read
-		// as one, as a PR's number does.
-		left = fmt.Sprintf(" %s %s %s ", urgent, colored(stateIcon(is.State), is.State.Color), colored(fmt.Sprintf("%-9s", is.Identifier), is.State.Color))
-		var meta []string
-		if (m.drilled != nil || m.tab == tabRecent) && is.Assignee != nil && !is.Assignee.IsMe {
-			meta = append(meta, is.Assignee.Name)
-		}
-		if m.drilled == nil && is.Project != nil {
-			meta = append(meta, is.Project.Name)
-		}
-		right = styleDim.Render(strings.Join(meta, " · "))
-		if m.worktrees[issueTarget(*is).Branch] {
-			right += " " + styleTree.Render("⌥")
-		}
-		return m.fitRow(left, is.Title, right, w, selected)
 	}
-	p := r.project
-	lead := " "
-	if p.Lead != nil && p.Lead.IsMe {
-		lead = styleDim.Render("◆")
-	}
-	left = fmt.Sprintf(" %s %s ", lead, colored(projectIcon(p.Status.Type), p.Status.Color))
-	right = styleDim.Render(fmt.Sprintf("%d%%", int(p.Progress*100+0.5))) // the status is its heading
-	if m.worktrees[projectTarget(*p).Branch] {
-		right += " " + styleTree.Render("⌥")
-	}
-	return m.fitRow(left, p.Name, right, w, selected)
+	return n
 }
 
-// fitRow lays out left + title + right-aligned meta in exactly w cells,
-// truncating the title (never the identifier) when space runs out.
-func (m model) fitRow(left, title, right string, w int, selected bool) string {
-	lw, rw := lipgloss.Width(left), lipgloss.Width(right)
+// meta is one thing said at a row's right edge. In a popup too narrow for
+// them all, the ones with the lowest keep go first.
+type meta struct {
+	text string
+	keep int
+}
+
+// issueMeta is what's right of an issue's title: that it's urgent, whose it
+// is and its project (each only where the list doesn't already say), and
+// that it has a worktree.
+func (m model) issueMeta(is *issue) []meta {
+	var ms []meta
+	if is.Priority == 1 {
+		ms = append(ms, meta{styleUrgent.Render("urgent"), 4})
+	}
+	if (m.drilled != nil || m.tab == tabRecent) && is.Assignee != nil && !is.Assignee.IsMe {
+		ms = append(ms, meta{styleDim.Render(shorten(is.Assignee.Name, 20)), 2})
+	}
+	if m.drilled == nil && is.Project != nil {
+		ms = append(ms, meta{styleDim.Render(shorten(is.Project.Name, 30)), 1})
+	}
+	if m.worktrees[issueTarget(*is).Branch] {
+		ms = append(ms, meta{styleTree.Render("worktree"), 3})
+	}
+	return ms
+}
+
+// projectMeta is what's right of a project's name: that you lead it, that
+// it has a worktree, and last, at the edge, how far along it is (its
+// status is its heading).
+func (m model) projectMeta(p *project) []meta {
+	var ms []meta
+	if p.Lead != nil && p.Lead.IsMe {
+		ms = append(ms, meta{styleDim.Render("you lead"), 1})
+	}
+	if m.worktrees[projectTarget(*p).Branch] {
+		ms = append(ms, meta{styleTree.Render("worktree"), 2})
+	}
+	return append(ms, meta{styleDim.Render(fmt.Sprintf("%d%%", int(p.Progress*100+0.5))), 3})
+}
+
+// minTitle is the room a title is given before the edge gives up a piece.
+const minTitle = 24
+
+// fitRow lays out left + title + right-aligned meta within w cells, a cell
+// short of the edge. Where space runs out the meta goes first, a piece at a
+// time, then the title is cut short; never the identifier.
+func fitRow(left, title string, ms []meta, w int) string {
+	lw := lipgloss.Width(left)
+	join := func() string {
+		parts := make([]string, len(ms))
+		for i, m := range ms {
+			parts[i] = m.text
+		}
+		return strings.Join(parts, styleDim.Render(" · "))
+	}
+	right := join()
+	for len(ms) > 0 && w-lw-lipgloss.Width(right)-2 < min(lipgloss.Width(title), minTitle) {
+		drop := 0
+		for i, m := range ms {
+			if m.keep < ms[drop].keep {
+				drop = i
+			}
+		}
+		ms = append(ms[:drop:drop], ms[drop+1:]...)
+		right = join()
+	}
+	rw := lipgloss.Width(right)
 	room := w - lw - rw - 2
-	if room < 8 {
-		right, rw = "", 0
+	if rw == 0 {
 		room = w - lw - 1
 	}
 	title = shorten(title, max(1, room))
 	pad := max(1, w-lw-lipgloss.Width(title)-rw-1)
-	line := left + styleLead.Render(title) + strings.Repeat(" ", pad) + right
-	if selected {
-		return highlight(line, w)
-	}
-	return line
+	return left + styleLead.Render(title) + strings.Repeat(" ", pad) + right
 }
 
 // highlight gives a whole row the selection background, w cells wide. The
@@ -1435,25 +1662,25 @@ func highlight(line string, w int) string {
 }
 
 func (m model) footer() []hint {
-	var hs []hint
-	switch {
-	case m.drilled != nil:
-		hs = []hint{{"enter details", "enter", hintGo}, {"^s start", "ctrl+s", hintAct}, {"^c new issue", "ctrl+c", hintAct}, {"^o open in Linear", "ctrl+o", hintView}}
-		if len(m.index.Workspaces) > 1 {
-			hs = append(hs, hint{"^t workspace", "ctrl+t", hintView})
-		}
-		return append(hs, hint{"esc back", "esc", hintQuiet})
-	case m.tab == tabProjects:
-		hs = []hint{{"enter details", "enter", hintGo}, {"^s start", "ctrl+s", hintAct}, {"^w worktree", "ctrl+w", hintAct}, {"^c new issue", "ctrl+c", hintAct}, {"^o open in Linear", "ctrl+o", hintView}, {"tab recent", "tab", hintView}}
-	case m.tab == tabRecent:
-		hs = []hint{{"enter details", "enter", hintGo}, {"^s start", "ctrl+s", hintAct}, {"^c new issue", "ctrl+c", hintAct}, {"^o open in Linear", "ctrl+o", hintView}, {"^r refresh", "ctrl+r", hintView}, {"tab my issues", "tab", hintView}}
-	default:
-		hs = []hint{{"enter details", "enter", hintGo}, {"^s start", "ctrl+s", hintAct}, {"^c new issue", "ctrl+c", hintAct}, {"^o open in Linear", "ctrl+o", hintView}, {"^r refresh", "ctrl+r", hintView}, {"tab projects", "tab", hintView}}
+	// By kind, so the colours sit together: go, act, view, leave. The tabs'
+	// keys are in the filter's placeholder.
+	hs := []hint{{"enter details", "enter", hintGo}, {"^s start", "ctrl+s", hintAct}}
+	if m.tab == tabProjects && m.drilled == nil {
+		hs = append(hs, hint{"^w worktree", "ctrl+w", hintAct})
 	}
+	hs = append(hs, hint{"^c new issue", "ctrl+c", hintAct}, hint{"^o open in Linear", "ctrl+o", hintView}, hint{"^r refresh", "ctrl+r", hintView})
 	if len(m.index.Workspaces) > 1 {
 		hs = append(hs, hint{"^t workspace", "ctrl+t", hintView})
 	}
-	return append(hs, hint{m.escLabel(), "esc", hintQuiet})
+	// esc says what it'll do.
+	esc := m.escLabel()
+	switch {
+	case m.filter.Value() != "":
+		esc = "esc clear"
+	case m.drilled != nil:
+		esc = "esc back"
+	}
+	return append(hs, hint{esc, "esc", hintQuiet})
 }
 
 // program lets background work (the sign-in flow) post progress to the UI.

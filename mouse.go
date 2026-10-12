@@ -4,11 +4,11 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
-// listTop is the first list row's line: under the tabs, the filter and a blank.
-const listTop = 3
+// listTop is the first list line: under the tabs, a blank, the filter and
+// another blank.
+const listTop = 4
 
 // renderFooter draws the keys along the bottom, the one under the pointer
 // lit so it reads as clickable.
@@ -33,7 +33,8 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if i, ok := m.rowAt(ev.Y); ok {
-			m.cursor = i
+			// Within what's shown: the list never scrolls under the pointer.
+			m.cursor, m.chose = i, true
 		} else if i, ok := m.stateAt(ev.Y); ok {
 			m.stateCursor = i
 		}
@@ -85,7 +86,7 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if i, ok := m.rowAt(ev.Y); ok {
-		m.cursor, m.flash = i, ""
+		m.cursor, m.chose, m.flash = i, true, ""
 		return m.activate(false)
 	}
 	if i, ok := m.stateAt(ev.Y); ok {
@@ -93,19 +94,6 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m.handleDetailKey(keyMsg("enter"))
 	}
 	return m, nil
-}
-
-// rowAt is the selectable list row on screen line y, if any.
-func (m model) rowAt(y int) (int, bool) {
-	if m.screen != screenList || y < listTop {
-		return 0, false
-	}
-	rows := m.rows()
-	i := m.offset + y - listTop
-	if i >= len(rows) || i >= m.offset+m.listHeight() || rows[i].label() {
-		return 0, false
-	}
-	return i, true
 }
 
 // stateAt is the status picker entry on screen line y, if any.
@@ -128,13 +116,12 @@ func (m model) stateAt(y int) (int, bool) {
 // clickTab switches to the clicked tab, leaving any detail screen or project
 // drill-down: the tabs are the way home.
 func (m model) clickTab(x int) (tea.Model, tea.Cmd) {
-	want, left := tab(-1), 0
-	for t, name := range tabNames {
-		w := lipgloss.Width(name)
-		if x >= left && x < left+w {
-			want = tab(t)
+	want := tab(-1)
+	_, cells := m.tabBar()
+	for _, c := range cells {
+		if x >= c.x0 && x < c.x1 {
+			want = c.tab
 		}
-		left += w + 1 // the space between tabs
 	}
 	if want < 0 {
 		return m, nil
@@ -145,7 +132,7 @@ func (m model) clickTab(x int) (tea.Model, tea.Cmd) {
 	}
 	if m.drilled != nil {
 		m.drilled, m.projIss = nil, nil
-		m.cursor, m.offset = 0, 0
+		m.cursor, m.offset, m.chose = 0, 0, false
 		m.clampCursor()
 	}
 	return m, nil

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -75,14 +76,14 @@ func TestTypingFiltersAndEscClearsThenCloses(t *testing.T) {
 		m = key(m, string(r))
 	}
 	rows := m.rows()
-	if len(rows) != 2 || rows[1].issue.Identifier != "A-3" {
+	if len(rows) != 1 || rows[0].issue.Identifier != "A-3" {
 		t.Fatalf("filtered rows %+v", rows)
 	}
 	if r := m.selected(); r == nil || r.issue.Identifier != "A-3" {
 		t.Fatalf("selection after filter %+v", r)
 	}
 	m = key(m, "esc")
-	if m.filter.Value() != "" || len(m.rows()) != 6 {
+	if m.filter.Value() != "" || len(m.rows()) != 3 {
 		t.Fatalf("esc should clear the filter first")
 	}
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -141,19 +142,8 @@ func TestLeftLeavesAProjectsIssues(t *testing.T) {
 }
 
 func TestBlankLineAboveEveryGroupButTheFirst(t *testing.T) {
-	var shape []string
-	for _, r := range twoGroups().rows() {
-		switch {
-		case r.spacer:
-			shape = append(shape, "_")
-		case r.header != "":
-			shape = append(shape, "#"+r.header)
-		default:
-			shape = append(shape, r.issue.Identifier)
-		}
-	}
-	if got := strings.Join(shape, " "); got != "#In Progress A-1 A-2 _ #Todo A-3" {
-		t.Fatalf("rows: %s", got)
+	if got := listShape(twoGroups()); got != "#In Progress 2 A-1 A-2 _ #Todo 1 A-3" {
+		t.Fatalf("list: %s", got)
 	}
 }
 
@@ -181,7 +171,7 @@ func TestWorktreeMarker(t *testing.T) {
 	is.BranchName = "me/a-1"
 	m := listModel(is)
 	next, _ := m.Update(worktreesMsg{branches: map[string]bool{"me/a-1": true}})
-	if !strings.Contains(next.(model).View(), "⌥") {
+	if !strings.Contains(screenText(next.(model)), "worktree") {
 		t.Fatal("no worktree marker")
 	}
 }
@@ -227,19 +217,9 @@ func TestProjectsAreGroupedByStatusYoursFirst(t *testing.T) {
 	sortProjects(ps)
 	m := newModel(context.Background(), config{}, "")
 	m.tab, m.projects = tabProjects, ps
-	var shape []string
-	for _, r := range m.rows() {
-		switch {
-		case r.spacer:
-			shape = append(shape, "_")
-		case r.header != "":
-			shape = append(shape, "#"+r.header)
-		default:
-			shape = append(shape, r.project.Name)
-		}
-	}
-	want := "#In Progress mine theirs _ #Planned planned _ #Backlog backlog one"
-	if got := strings.Join(shape, " "); got != want {
+	m.width, m.height, m.mode, m.loaded[tabProjects] = 80, 30, modeList, true
+	want := "#In Progress 2 mine theirs _ #Planned 1 planned _ #Backlog 1 backlog one"
+	if got := listShape(m); got != want {
 		t.Fatalf("rows:\n got %s\nwant %s", got, want)
 	}
 }
@@ -300,7 +280,7 @@ func TestFilterByIdentifierFindsThatTeamsOnly(t *testing.T) {
 	m := listModel()
 	m.client = otherTeams()
 	m = typeLookup(m, "ops-205")
-	if rows := m.rows(); len(rows) != 2 || rows[1].issue.Identifier != "OPS-205" {
+	if rows := m.rows(); len(rows) != 1 || rows[0].issue.Identifier != "OPS-205" {
 		t.Fatalf("rows %+v", rows)
 	}
 }
@@ -311,7 +291,7 @@ func TestYourOwnIssueIsListedOnce(t *testing.T) {
 	m := listModel(mine)
 	m.client = newDemoSource()
 	m = typeLookup(m, "212") // found by Linear too, but it's already listed
-	if rows := m.rows(); len(rows) != 2 {
+	if rows := m.rows(); len(rows) != 1 {
 		t.Fatalf("rows %+v", rows)
 	}
 	m = key(m, "esc")
@@ -406,5 +386,123 @@ func TestSignInPasteGoesToTheSignIn(t *testing.T) {
 	}
 	if m.paste.Value() != "" {
 		t.Errorf("field kept %q", m.paste.Value())
+	}
+}
+
+// listShape is the list as drawn, a word a line: "#" a heading with its
+// count, "_" a blank, else the issue's identifier or the project's name.
+func listShape(m model) string {
+	lines := strings.Split(screenText(m), "\n")
+	var shape []string
+	for i, r := 0, m.rows(); i < len(r); i++ {
+		if m.headed(r, i) {
+			if i != m.offset {
+				shape = append(shape, "_")
+			}
+			shape = append(shape, "#"+r[i].group+" "+strings.TrimPrefix(strings.TrimSpace(lines[listTop+len(shape)]), r[i].group+" "))
+		}
+		name := ""
+		if r[i].issue != nil {
+			name = r[i].issue.Identifier
+		} else {
+			name = r[i].project.Name
+		}
+		if !strings.Contains(lines[listTop+len(shape)], name) {
+			return "line " + lines[listTop+len(shape)] + " isn't " + name
+		}
+		shape = append(shape, name)
+	}
+	return strings.Join(shape, " ")
+}
+
+// Opened and not yet touched, the selection is the top row, whatever a
+// fresher list puts there.
+func TestSelectionStaysOnTheTopRowUntilYouPickOne(t *testing.T) {
+	m := withIDs(twoGroups())
+	fresh := withIDs(listModel(
+		mkIssue("A-9", "started", "In Review", 3, 0),
+		mkIssue("A-2", "started", "In Progress", 2, 0),
+		mkIssue("A-1", "started", "In Progress", 2, 0),
+	)).issues
+	next, _ := m.Update(issuesMsg{issues: fresh})
+	if r := next.(model).selected(); r == nil || r.issue.Identifier != "A-9" || next.(model).offset != 0 {
+		t.Fatalf("selected %+v, want the top row A-9", r)
+	}
+}
+
+// Once you've picked one, a fresher list keeps you on it, wherever it went.
+func TestSelectionFollowsYourPickThroughARefresh(t *testing.T) {
+	m := key(withIDs(twoGroups()), "down") // A-2
+	fresh := withIDs(listModel(
+		mkIssue("A-9", "started", "In Review", 3, 0),
+		mkIssue("A-1", "started", "In Progress", 2, 0),
+		mkIssue("A-3", "unstarted", "Todo", 1, 0),
+		mkIssue("A-2", "backlog", "Backlog", 0, 0),
+	)).issues
+	next, _ := m.Update(issuesMsg{issues: fresh})
+	m = next.(model)
+	if r := m.selected(); r == nil || r.issue.Identifier != "A-2" {
+		t.Fatalf("selected %+v, want A-2", r)
+	}
+	// Gone from the list, it's the top row again.
+	next, _ = m.Update(issuesMsg{issues: fresh[:3]})
+	if r := next.(model).selected(); r == nil || r.issue.Identifier != "A-9" {
+		t.Fatalf("selected %+v, want the top row A-9", r)
+	}
+}
+
+// Scrolled into a group, its heading is still the first line of the list.
+func TestTheGroupsHeadingStaysAtTheTopWhileScrolling(t *testing.T) {
+	var is []issue
+	for i := 0; i < 40; i++ {
+		is = append(is, mkIssue("A-"+strconv.Itoa(i), "unstarted", "Todo", 1, 0))
+	}
+	m := listModel(is...)
+	for i := 0; i < 30; i++ {
+		m = key(m, "down")
+	}
+	lines := strings.Split(screenText(m), "\n")
+	if m.offset == 0 || !strings.Contains(lines[listTop], "Todo 40") {
+		t.Fatalf("offset %d, first list line %q", m.offset, lines[listTop])
+	}
+	if r := m.selected(); r.issue.Identifier != "A-30" || !strings.Contains(screenText(m), "A-30 ") {
+		t.Fatalf("A-30 isn't on screen:\n%s", screenText(m))
+	}
+	// Every line the mouse finds a row on is that row's.
+	for y, line := range lines {
+		if i, ok := m.rowAt(y); ok && !strings.Contains(line, m.rows()[i].issue.Identifier+" ") {
+			t.Fatalf("line %d %q isn't row %d", y, line, i)
+		}
+	}
+}
+
+// Too narrow for all a row says at its edge, the title keeps its room and
+// the edge gives up the least of it first; narrower still, the tabs shorten.
+func TestNarrowPopupsKeepTheTitle(t *testing.T) {
+	is := mkIssue("A-1", "started", "In Progress", 0, 1)
+	is.Title, is.BranchName, is.Project = "Search index drops accents", "me/a-1", &projectRef{Name: "A project with a long name"}
+	m := listModel(is)
+	next, _ := m.Update(worktreesMsg{branches: map[string]bool{"me/a-1": true}})
+	m = next.(model)
+	for _, tc := range []struct {
+		width      int
+		has, hasnt string
+	}{
+		{120, "urgent · A project with a long name · worktree", "accents…"},
+		{64, "Search index drops accents", "A project"},
+		{64, "urgent · worktree", "accents…"},
+		{30, "Mine 1", "Linear"},
+	} {
+		next, _ := m.Update(tea.WindowSizeMsg{Width: tc.width, Height: 20})
+		m = next.(model)
+		text := screenText(m)
+		if !strings.Contains(text, tc.has) || strings.Contains(text, tc.hasnt) {
+			t.Errorf("width %d: want %q and no %q:\n%s", tc.width, tc.has, tc.hasnt, text)
+		}
+		for _, line := range strings.Split(m.View(), "\n") {
+			if w := lipgloss.Width(line); w > tc.width {
+				t.Errorf("width %d: line %d cells wide: %q", tc.width, w, stripANSI(line))
+			}
+		}
 	}
 }
