@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 — 2026-10-12
 
 - **The lists, laid out as herdr-github's and herdr-recap's are**, an issue
   still to a line. The header names the popup and shows the tab as a pill,
