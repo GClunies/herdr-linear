@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 — 2026-10-12
 
 - "Linear" is no longer written before the tabs: the popup's border says it
   already, and the tabs now start in line with the keys along the bottom, as
