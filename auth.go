@@ -533,6 +533,7 @@ func logoutLocked(ctx context.Context, cfg config, w workspace, local bool) erro
 		if w.ID == "" {
 			return nil
 		}
+		dropListCache(w.ID) // its issues' titles go with it
 		return updateIndexLocked(func(ix *workspaceIndex) { ix.remove(w.ID) })
 	}
 	t, err := readStore(acct)

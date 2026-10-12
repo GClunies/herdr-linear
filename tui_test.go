@@ -506,3 +506,21 @@ func TestNarrowPopupsKeepTheTitle(t *testing.T) {
 		}
 	}
 }
+
+// Every tab loads when the popup opens, so each says how many it lists; one
+// landing before the tab you're on doesn't pass that one off as empty.
+func TestEveryTabSaysHowManyItHasBeforeYouGoToIt(t *testing.T) {
+	m := newModel(context.Background(), config{}, "/repo")
+	m.width, m.height = 100, 20
+	next, _ := m.Update(projectsMsg{projects: []project{{ID: "p1", Name: "Offline sync"}}})
+	m = next.(model)
+	if text := screenText(m); m.mode != modeLoading || !strings.Contains(text, "Loading") || !strings.Contains(text, "Projects 1") {
+		t.Fatalf("mode %v:\n%s", m.mode, text)
+	}
+	next, _ = m.Update(recentMsg{issues: []issue{mkIssue("A-7", "unstarted", "Todo", 1, 0)}})
+	next, _ = next.(model).Update(issuesMsg{issues: twoGroups().issues})
+	m = next.(model)
+	if text := screenText(m); m.mode != modeList || !strings.Contains(text, "My issues 3  Projects 1  Recent 1") {
+		t.Fatalf("mode %v:\n%s", m.mode, text)
+	}
+}

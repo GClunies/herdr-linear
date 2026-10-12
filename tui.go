@@ -200,6 +200,8 @@ type model struct {
 	drilled   *project // the project whose issues are listed, if any
 	projIss   []issue
 	loaded    map[tab]bool
+	stale     map[tab]bool // it's the list from last time; the fresh one is on its way
+	cache     bool         // lists are kept between popups (cache.go); not the demo's
 	worktrees map[string]bool
 	cursor    int
 	offset    int
@@ -248,7 +250,7 @@ func newModel(ctx context.Context, cfg config, invoked string) model {
 	sp.Spinner = spinner.MiniDot
 	return model{
 		ctx: ctx, cfg: cfg, baseCfg: cfg, client: &linearClient{cfg: cfg}, invoked: invoked,
-		mode: modeLoading, filter: ti, spin: sp, loaded: map[tab]bool{}, worktrees: map[string]bool{},
+		mode: modeLoading, filter: ti, spin: sp, loaded: map[tab]bool{}, stale: map[tab]bool{}, worktrees: map[string]bool{},
 		states: map[string][]workflowState{}, md: newMarkdown(cfg.Theme != "light"),
 		mouseX: -1, mouseY: -1,
 	}
@@ -256,7 +258,7 @@ func newModel(ctx context.Context, cfg config, invoked string) model {
 
 func (m model) Init() tea.Cmd {
 	if _, ok := m.client.(*demoSource); ok {
-		return tea.Batch(m.spin.Tick, m.loadIssues(), m.loadWorktrees())
+		return tea.Batch(m.spin.Tick, m.loadIssues(), m.loadProjects(), m.loadRecent(), m.loadWorktrees())
 	}
 	return tea.Batch(m.spin.Tick, m.loadWorkspaces())
 }
@@ -277,18 +279,16 @@ func (m model) useWorkspace(w workspace, remember bool) (model, tea.Cmd) {
 	m.client = &linearClient{cfg: m.cfg, ws: w}
 	m.issues, m.projects, m.recent, m.drilled, m.projIss = nil, nil, nil, nil, nil
 	m.lookup, m.lookupFor, m.lookingUp = nil, "", ""
-	m.loaded, m.states = map[tab]bool{}, map[string][]workflowState{}
+	m.loaded, m.stale, m.states = map[tab]bool{}, map[tab]bool{}, map[string][]workflowState{}
 	m.screen, m.cursor, m.offset, m.chose, m.err, m.flash = screenList, 0, 0, false, "", ""
 	m.cur, m.curDetail, m.curProject, m.projDetail = nil, nil, nil, nil
 	m.form, m.created, m.teamList = issueForm{}, nil, nil
 	m.mode = modeLoading
-	cmds := []tea.Cmd{m.spin.Tick, m.loadIssues(), m.loadWorktrees()}
-	switch m.tab {
-	case tabProjects:
-		cmds = append(cmds, m.loadProjects())
-	case tabRecent:
-		cmds = append(cmds, m.loadRecent())
+	if m.cache {
+		m = m.useCache(readListCache(w.ID))
 	}
+	// Every tab's list, so each says how many it has before you go to it.
+	cmds := []tea.Cmd{m.spin.Tick, m.loadIssues(), m.loadProjects(), m.loadRecent(), m.loadWorktrees()}
 	if m.target != nil {
 		cmds = append(cmds, m.findTarget(*m.target))
 	}
@@ -303,6 +303,33 @@ func (m model) useWorkspace(w workspace, remember bool) (model, tea.Cmd) {
 		})
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// useCache shows the lists the last popup loaded until fresh ones arrive.
+func (m model) useCache(c cachedLists) model {
+	if c.Mine != nil {
+		m.issues, m.loaded[tabMine], m.stale[tabMine] = *c.Mine, true, true
+	}
+	if c.Projects != nil {
+		m.projects, m.loaded[tabProjects], m.stale[tabProjects] = *c.Projects, true, true
+	}
+	if c.Recent != nil {
+		m.recent, m.loaded[tabRecent], m.stale[tabRecent] = *c.Recent, true, true
+	}
+	if m.loaded[m.tab] {
+		m.mode = modeList
+		m.clampCursor()
+	}
+	return m
+}
+
+// keep saves tab t's fresh list for the next popup to open on.
+func (m model) keep(t tab, issues []issue, projects []project, err error) tea.Cmd {
+	if !m.cache || m.ws == nil || err != nil { // not one cut short, either
+		return nil
+	}
+	id := m.ws.ID
+	return func() tea.Msg { saveListCache(id, t, issues, projects); return nil }
 }
 
 // targetMsg is the issue the popup was opened on, found (or not).
@@ -447,34 +474,46 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case issuesMsg:
-		if msg.gen != m.gen || m.handleLoadErr(msg.err) {
+		if msg.gen != m.gen {
+			return m, nil
+		}
+		m.stale[tabMine] = false
+		if m.handleLoadErr(msg.err) {
 			return m, nil
 		}
 		key := m.selectedKey()
 		m.issues, m.loaded[tabMine] = msg.issues, true
-		m.doneLoading()
+		m.doneLoading(tabMine)
 		m.reselect(key)
-		return m, nil
+		return m, m.keep(tabMine, msg.issues, nil, msg.err)
 
 	case recentMsg:
-		if msg.gen != m.gen || m.handleLoadErr(msg.err) {
+		if msg.gen != m.gen {
+			return m, nil
+		}
+		m.stale[tabRecent] = false
+		if m.handleLoadErr(msg.err) {
 			return m, nil
 		}
 		key := m.selectedKey()
 		m.recent, m.loaded[tabRecent] = msg.issues, true
-		m.doneLoading()
+		m.doneLoading(tabRecent)
 		m.reselect(key)
-		return m, nil
+		return m, m.keep(tabRecent, msg.issues, nil, msg.err)
 
 	case projectsMsg:
-		if msg.gen != m.gen || m.handleLoadErr(msg.err) {
+		if msg.gen != m.gen {
+			return m, nil
+		}
+		m.stale[tabProjects] = false
+		if m.handleLoadErr(msg.err) {
 			return m, nil
 		}
 		key := m.selectedKey()
 		m.projects, m.loaded[tabProjects] = msg.projects, true
-		m.doneLoading()
+		m.doneLoading(tabProjects)
 		m.reselect(key)
-		return m, nil
+		return m, m.keep(tabProjects, nil, msg.projects, msg.err)
 
 	case projectIssuesMsg:
 		if msg.gen != m.gen || m.handleLoadErr(msg.err) {
@@ -483,7 +522,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.drilled != nil && m.drilled.ID == msg.projectID {
 			key := m.selectedKey()
 			m.projIss = msg.issues
-			m.doneLoading()
+			if !m.modal() {
+				m.mode = modeList
+			}
 			m.reselect(key)
 		}
 		return m, nil
@@ -639,10 +680,11 @@ func (m model) modal() bool {
 	return m.mode == modeBusy || m.mode == modeSigningIn || m.mode == modeChooseWorkspace
 }
 
-// doneLoading shows the list once a load lands, unless something modal is
-// on screen.
-func (m *model) doneLoading() {
-	if !m.modal() {
+// doneLoading shows the list once tab t's load lands, if it's the one being
+// waited for: every tab loads when the popup opens, and another's landing
+// first doesn't make this one ready. Not while something modal is on screen.
+func (m *model) doneLoading(t tab) {
+	if !m.modal() && (m.tab == t || m.loaded[m.tab]) && (m.drilled == nil || m.projIss != nil) {
 		m.mode = modeList
 	}
 }
@@ -768,6 +810,11 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+r":
 		m.err = ""
+		if m.drilled == nil && m.loaded[m.tab] {
+			// What's listed stays, and stays usable, until the fresh one lands.
+			m.stale[m.tab] = true
+			return m, m.reload()
+		}
 		m.mode = modeLoading
 		return m, m.reload()
 	case "ctrl+o":
@@ -1477,21 +1524,19 @@ func (m model) tabSize(t tab) (int, bool) {
 	return len(m.issues), m.loaded[t]
 }
 
-// tabBar is the popup's first line: its name, then the tabs, each with how
-// many it lists, the one shown as a pill. Too wide for the popup, the name
-// goes, then the labels shorten. On an issue's or a project's screen no tab
-// is the one shown: they're the way back.
+// tabBar is the popup's first line: the tabs, each with how many it lists,
+// the one shown as a pill, in line with the keys' pills along the bottom.
+// The popup's name is on its frame, which herdr draws. Too wide for the
+// popup, the labels shorten. On an issue's or a project's screen no tab is
+// the one shown: they're the way back.
 func (m model) tabBar() (string, []tabCell) {
 	cells := []tabCell{{tab: tabMine}, {tab: tabProjects}, {tab: tabRecent}}
 	var line string
-	for _, form := range []struct{ name, short bool }{{true, false}, {false, false}, {false, true}} {
-		line = ""
-		if form.name {
-			line = styleHeader.Render(" Linear ") + " "
-		}
+	for _, short := range []bool{false, true} {
+		line = " "
 		x := lipgloss.Width(line)
 		for i, c := range cells {
-			label, n := tabName(c.tab, form.short), ""
+			label, n := tabName(c.tab, short), ""
 			if size, ok := m.tabSize(c.tab); ok {
 				n = " " + strconv.Itoa(size)
 			}
@@ -1511,7 +1556,8 @@ func (m model) tabBar() (string, []tabCell) {
 }
 
 // viewTabs is the tab bar, with where you are past the lists, and on the
-// right the workspace, when there's more than one to be in.
+// right what's going on behind it and the workspace, when there's more than
+// one to be in.
 func (m model) viewTabs() string {
 	line, _ := m.tabBar()
 	switch {
@@ -1534,6 +1580,13 @@ func (m model) viewTabs() string {
 		tag = styleDim.Render(shorten(m.ws.Name, 24) + " ")
 	} else if _, demo := m.client.(*demoSource); demo {
 		tag = styleDim.Render("demo ")
+	}
+	// What's listed is from last time, or being refreshed.
+	for t := range m.stale {
+		if m.stale[t] && m.mode != modeBusy {
+			tag = m.spin.View() + styleDim.Render(" updating ") + tag
+			break
+		}
 	}
 	if pad := m.width - lipgloss.Width(line) - lipgloss.Width(tag); tag != "" && pad > 1 {
 		line += strings.Repeat(" ", pad) + tag
@@ -1702,7 +1755,7 @@ func runPicker(ctx context.Context, cfg config, demo bool) error {
 	if demo {
 		m.client = newDemoSource()
 	} else {
-		m.repo = repoKey(invoked)
+		m.repo, m.cache = repoKey(invoked), true
 		m.back = cameFrom()
 		if ref, ok := targetIssue(); ok {
 			m.target = &ref

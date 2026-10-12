@@ -675,6 +675,14 @@ directory lists the workspaces you're signed in to (ID, name, URL key) and
 which one each repo goes with, by the repo's path. Nothing secret; signing out
 of a workspace removes it and its repos.
 
+`lists.json`, next to it, has the lists the popup last loaded for each
+workspace (your issues, the projects, what you created lately: titles,
+identifiers, statuses, assignees' names and branch names), so the next popup
+has something to show while Linear answers. It's readable only by you
+(`0600`), never leaves the machine, and a workspace's lists are deleted when
+you sign out of it. Descriptions and comments aren't kept. The demo keeps
+nothing.
+
 What the keychain and keyring do and don't protect: on macOS the item is created by
 the `security` tool, so it's the `security` tool the keychain trusts to read
 it, not this plugin. Any program running as you can therefore read it with
@@ -839,8 +847,11 @@ context and opens the plugin's `picker` pane as a popup. That popup is the
 same binary running a [Bubble Tea](https://github.com/charmbracelet/bubbletea)
 interface.
 
-- **Linear**: GraphQL over HTTPS with the OAuth access token. It uses one query
-  per screen and caches nothing between popups, so what you see is current.
+- **Linear**: GraphQL over HTTPS with the OAuth access token, one query per
+  list or screen. All three lists are asked for when the popup opens. The
+  last ones are kept (`lists.json`, below) and shown at once, marked
+  *updating* until the fresh ones replace them, so the popup doesn't open on
+  a spinner.
 - **herdr**: its local socket API: `worktree.list`, `worktree.create` and
   `worktree.open` for worktrees, `plugin.pane.open` for the popup, and
   `pane.list` plus `agent.prompt` for the start hand-off.

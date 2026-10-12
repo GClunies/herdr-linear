@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- "Linear" is no longer written before the tabs: the popup's border says it
+  already, and the tabs now start in line with the keys along the bottom, as
+  herdr-github's and herdr-recap's do.
+- Every tab says how many it lists as soon as the popup opens, not only
+  once you've been to it: all three lists load at the start.
+- **The popup opens on the lists from last time** rather than on a
+  spinner, marked *updating* until Linear's fresh ones replace them.
+  `ctrl+r` keeps the list on screen, and usable, the same way. The lists
+  are kept per workspace in `lists.json` in the plugin's state directory,
+  readable only by you, and a workspace's are deleted when you sign out of
+  it; see *Privacy and security* in the README.
+
 ## 0.10.0 — 2026-10-12
 
 - **The lists, laid out as herdr-github's and herdr-recap's are**, an issue
