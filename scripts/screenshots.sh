@@ -10,6 +10,16 @@ set -eu
 cd "$(dirname "$0")/.."
 
 command -v freeze >/dev/null 2>&1 || { echo "needs freeze: brew install charmbracelet/tap/freeze" >&2; exit 1; }
+# freeze renders at 2x; 1800px wide is still sharp on a Retina README. sips is
+# macOS's; elsewhere ImageMagick does it, and without either the PNGs are
+# left at freeze's size.
+if command -v sips >/dev/null 2>&1; then
+	shrink() { sips --resampleWidth 1800 "$1" >/dev/null; }
+elif command -v magick >/dev/null 2>&1; then
+	shrink() { magick "$1" -resize 1800x "$1"; }
+else
+	shrink() { :; }
+fi
 
 screens=$(mktemp -d)
 trap 'rm -rf "$screens"' EXIT
@@ -24,10 +34,6 @@ for f in "$screens"/*.ansi; do
 		--font.family "JetBrains Mono" --font.size 14 --line-height 1.3 \
 		--padding 20,24 --margin 0 --border.radius 10 \
 		--background "#1e1e2e" --output "docs/images/$name.png" <"$f" >/dev/null
-	# freeze renders at 2x; 1800px wide is still sharp on a Retina README.
-	# sips is macOS's: elsewhere the PNGs are left at freeze's size.
-	if command -v sips >/dev/null 2>&1; then
-		sips --resampleWidth 1800 "docs/images/$name.png" >/dev/null
-	fi
+	shrink "docs/images/$name.png"
 	echo "docs/images/$name.png"
 done
