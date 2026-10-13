@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.2 — 2026-10-13
+
+- **The README says what herdr-snooze can now wait for**: until an agent's
+  done, or until its pull request is merged, which it reads from
+  herdr-github's labels.
+
 ## 0.11.1 — 2026-10-12
 
 - **herdr-snooze joins the plugins that work together.** The README's table
