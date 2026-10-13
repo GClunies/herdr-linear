@@ -180,6 +180,9 @@ type model struct {
 	ws       *workspace // the workspace shown; nil until chosen
 	wsCursor int        // on the workspace screen; len(index.Workspaces) is "sign in"
 	gen      int        // bumped on switching workspace (see issuesMsg)
+	// draft is the new issue the popup was left on to attach files, to open
+	// on again (attach.go).
+	draft *draft
 	// target is the issue the popup was opened on (HERDR_LINEAR_ISSUE), to
 	// find once there's a workspace; direct, that its screen is where the
 	// popup opened, so esc leaves; back, the popup it was opened from.
@@ -586,11 +589,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.target != nil {
 			pick = workspaceFor(m.index, m.repo, *m.target)
 		}
+		if m.draft != nil && m.index.byID(m.draft.WorkspaceID) != nil {
+			pick = m.index.byID(m.draft.WorkspaceID)
+		}
 		switch w := pick; {
 		case len(m.index.Workspaces) == 0:
 			m.mode = modeSignedOut
 		case w != nil:
 			m, cmd = m.useWorkspace(*w, false)
+			// Back from attaching files: the new issue as it was.
+			if d := m.draft; d != nil && d.WorkspaceID == w.ID {
+				var more tea.Cmd
+				m.draft = nil
+				m, more = m.restoreDraft(*d)
+				cmd = tea.Batch(cmd, more)
+			}
 		default:
 			m = m.chooseWorkspace()
 		}
@@ -1759,6 +1772,11 @@ func runPicker(ctx context.Context, cfg config, demo bool) error {
 		m.back = cameFrom()
 		if ref, ok := targetIssue(); ok {
 			m.target = &ref
+		}
+		if os.Getenv(draftEnv) == "1" {
+			if d, err := takeDraft(os.Getenv(pickedEnv)); err == nil {
+				m.draft = d
+			}
 		}
 	}
 	if !demo {

@@ -29,8 +29,8 @@ worktree, and the issue handed to the agent that opens there.
 
 ## Works with the other herdr plugins
 
-This is one of four plugins that are useful alone and better together.
-Install [herdr-recap](https://github.com/mrolafsson/herdr-recap), [herdr-github](https://github.com/mrolafsson/herdr-github) or [herdr-snooze](https://github.com/mrolafsson/herdr-snooze) alongside it and they find each other:
+This is one of five plugins that are useful alone and better together.
+Install [herdr-recap](https://github.com/mrolafsson/herdr-recap), [herdr-github](https://github.com/mrolafsson/herdr-github), [herdr-snooze](https://github.com/mrolafsson/herdr-snooze) or [herdr-file-transfer](https://github.com/mrolafsson/herdr-file-transfer) alongside it and they find each other:
 there is nothing to configure.
 
 | Plugin | What it adds to the others |
@@ -39,6 +39,7 @@ there is nothing to configure.
 | [herdr-github](https://github.com/mrolafsson/herdr-github) | Tags every space and agent with its branch's pull request (`#482 ✓ approved`), which Recap shows and groups its agents by. Opens straight on an agent's PR when Recap asks. |
 | **[herdr-linear](https://github.com/mrolafsson/herdr-linear)** (this one) | Tags every space and agent with the Linear issue its branch is named for (`ENG-142 In Progress`), which Recap shows. Opens straight on that issue when Recap asks. |
 | [herdr-snooze](https://github.com/mrolafsson/herdr-snooze) | Hides an agent, or a whole space, from herdr's Agents panel until a time you pick, or until the agent's done or its pull request is merged (from herdr-github's labels). Tags each snoozed agent with when it wakes (`💤 17:30`, `💤 till done`), which Recap shows. Opens straight on an agent when Recap asks, and opens Recap on one with `r`. |
+| [herdr-file-transfer](https://github.com/mrolafsson/herdr-file-transfer) | Files between the machine you're at and the server herdr runs on. Chooses the files a new issue attaches (`ctrl+f`): any on the server, or one brought over from your Mac, or from an iPad with Taildrop. See [Attaching files](#attaching-files). |
 
 - **Auto-discovery.** Each plugin asks herdr which others are installed and
   enabled. A link only appears when the plugin behind it is there; without
@@ -47,7 +48,7 @@ there is nothing to configure.
   following a link turns the open popup into the other plugin's, in place and
   without a flicker, and `esc` there brings you back to where you were.
 - **Shared look.** A title, a branch, a pull request and a key are
-  drawn the same in all four, in herdr's theme colours.
+  drawn the same in all five, in herdr's theme colours.
 
 See [Sidebar labels](#sidebar-labels) for the tags and [Opened on an issue](#opened-on-an-issue) for the convention behind the links.
 
@@ -305,11 +306,26 @@ it doesn't land in Triage unless you choose Triage. Pressing ctrl+c with a proje
 inside a project's issues, puts the new issue in that project.
 
 Tab (or ↑ ↓) moves between the fields: title, details (Markdown, several
-lines; enter starts a new line there, ctrl+s creates), team, project, status,
-priority and assignee. On a choice, ← → step through the options, and enter or
+lines; enter starts a new line there, ctrl+s creates), files, team, project,
+status, priority and assignee. On a choice, ← → step through the options, and enter or
 typing opens the list of them, filtered by what you type. A project from
 another team brings its team along; changing team drops a project that isn't
 in it.
+
+#### Attaching files
+
+The **Files** field lists what the issue will have attached, with *+ Add
+new…* under them. ctrl+f anywhere in the form (or enter, or a click, on *Add
+new…*) attaches more, with
+[herdr-file-transfer](https://github.com/mrolafsson/herdr-file-transfer): the
+popup becomes its, on the agent's folder, where you pick any file on the
+server, or drop one from your Mac (or share one from an iPad with Taildrop)
+to bring it over first. enter there, and you're back on the issue as you left
+it, the files added. ↑ ↓ go through them; `x` takes one off.
+
+When it's created, each file is uploaded to Linear and added to the end of
+the description: an image shown, anything else as a link. Without
+herdr-file-transfer installed, ctrl+f says how to get it.
 
 Once it's created:
 
@@ -603,21 +619,27 @@ Some cases where the picker's colours differ from herdr's:
 ## Privacy and security
 
 **What leaves your machine.** Requests go to Linear only: `linear.app` for
-sign-in and `api.linear.app` for data. There's no other server, no analytics,
-and no telemetry. The **start** prompt goes to the agent in your own terminal.
+sign-in and `api.linear.app` for data, and a file you attach to a new issue
+to the upload address Linear gives for it (its file storage). There's no
+other server, no analytics, and no telemetry. The **start** prompt goes to the
+agent in your own terminal.
 
 **What's read.** Your assigned issues, active projects and their issues, and
 the details of whatever you open: descriptions, labels, cycles, workflow
 states. For the sidebar labels: your teams' keys, and the identifier, title
 and status of the issues your branches are named for, which are kept in the
 plugin's state directory and shown by herdr. **What's written:** an issue's status, and its assignee when **start**
-claims an unowned issue. Nothing else is ever changed.
+claims an unowned issue; a new issue you create, and the files you attach to
+it, uploaded only when you create it. Nothing else is ever changed. While
+herdr-file-transfer chooses files, the new issue's form waits in
+`draft.json` in the state directory (`0600`), read back and removed as the
+popup opens again.
 
 **Sign-in.** OAuth 2.0 authorization code flow with PKCE (S256):
 
 - The plugin is a *public* client: it has no client secret, so there's none to
   leak.
-- Scopes: `read,write`. Write is used only for the two changes above.
+- Scopes: `read,write`. Write is used only for the changes above.
 - The callback is `http://localhost:47821/callback`, served only on the
   loopback interface for the few seconds the sign-in takes. A random `state`
   value is checked, so any request that isn't from this sign-in is refused.

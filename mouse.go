@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/charmbracelet/x/ansi"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -85,6 +86,14 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if i, ok := m.fileRowAt(ev.Y); ok {
+		m.form.setFocus(fieldAttach)
+		m.form.fileCursor, m.err = i, ""
+		if i == len(m.form.files) {
+			return m.attach()
+		}
+		return m, nil
+	}
 	if i, ok := m.rowAt(ev.Y); ok {
 		m.cursor, m.chose, m.flash = i, true, ""
 		return m.activate(false)
@@ -94,6 +103,22 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m.handleDetailKey(keyMsg("enter"))
 	}
 	return m, nil
+}
+
+// fileRowAt is the new issue's Files row on screen line y, if any: a file,
+// or len(files) for "Add new…".
+func (m model) fileRowAt(y int) (int, bool) {
+	if m.screen != screenCreate || m.form.picking {
+		return 0, false
+	}
+	lines := strings.Split(ansi.Strip(m.view()), "\n")
+	for i, l := range lines {
+		if strings.Contains(l, addNew) {
+			row := y - (i - len(m.form.files))
+			return row, row >= 0 && row <= len(m.form.files)
+		}
+	}
+	return 0, false
 }
 
 // stateAt is the status picker entry on screen line y, if any.

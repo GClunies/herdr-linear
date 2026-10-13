@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -334,6 +335,11 @@ func (d *demoSource) teams(context.Context) ([]teamInfo, error) {
 		ID string `json:"id"`
 	}{"s-todo"}
 	return []teamInfo{t}, nil
+}
+
+// uploadFile pretends: a made-up URL, nothing sent.
+func (d *demoSource) uploadFile(_ context.Context, path string) (string, error) {
+	return "https://uploads.linear.app/demo/" + filepath.Base(path), nil
 }
 
 // createIssue adds the issue to the demo workspace, numbered after the last.

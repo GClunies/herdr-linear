@@ -91,7 +91,7 @@ func TestQuickAddOnASelectedProjectAndInADrilledOne(t *testing.T) {
 func TestQuickAddChoosesFromLists(t *testing.T) {
 	m := press(demoModel(t), "ctrl+c")
 	m = typeText(m, "Faster search")
-	m = press(press(press(m, "tab"), "tab"), "tab") // → Project
+	m = press(press(press(press(m, "tab"), "tab"), "tab"), "tab") // → Project
 	if m.form.focus != fieldProject {
 		t.Fatalf("focus %d", m.form.focus)
 	}

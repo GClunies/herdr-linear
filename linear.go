@@ -39,6 +39,9 @@ type source interface {
 	// teams lists the workspace's teams, for a new issue to go in.
 	teams(ctx context.Context) ([]teamInfo, error)
 	createIssue(ctx context.Context, n newIssue) (issue, error)
+	// uploadFile puts a file in Linear's storage, for a description to
+	// show: its URL (attach.go).
+	uploadFile(ctx context.Context, path string) (string, error)
 }
 
 type linearClient struct {

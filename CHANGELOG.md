@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.12.0 — 2026-10-13
+
+- **Attach files to a new issue.** The form has a **Files** field: `ctrl+f`
+  (or *+ Add new…*) opens herdr-file-transfer's popup in its place, to pick
+  any file on the server or bring one over from your Mac or iPad, and comes
+  back with the form as you left it. Files are uploaded when the issue's
+  created: images shown in the description, anything else linked.
+- herdr-file-transfer joins the plugins that work together, in the README's
+  table.
+
 ## 0.11.2 — 2026-10-13
 
 - **The README says what herdr-snooze can now wait for**: until an agent's

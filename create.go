@@ -1,6 +1,8 @@
 package main
 
 import (
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -45,6 +47,7 @@ type createdMsg struct {
 const (
 	fieldTitle = iota
 	fieldDesc
+	fieldAttach
 	fieldTeam
 	fieldProject
 	fieldStatus
@@ -53,7 +56,7 @@ const (
 	fieldCount
 )
 
-var fieldNames = [fieldCount]string{"Title", "Details", "Team", "Project", "Status", "Priority", "Assignee"}
+var fieldNames = [fieldCount]string{"Title", "Details", "Files", "Team", "Project", "Status", "Priority", "Assignee"}
 
 var priorityNames = []string{"No priority", "Urgent", "High", "Medium", "Low"}
 
@@ -67,6 +70,10 @@ type issueForm struct {
 	stateID   string // "" = the team's default
 	priority  int
 	assignMe  bool
+	// files are attached (attach.go): uploaded when it's created. On the
+	// Files field, fileCursor is the one selected; len(files) is "Add new…".
+	files      []string
+	fileCursor int
 
 	// The list of choices open over a field: enter on it, or start typing.
 	picking    bool
@@ -439,8 +446,11 @@ func (m model) handleCreateKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+s":
 		return m.submit()
+	case "ctrl+f":
+		return m.attach()
 	case "tab":
 		f.setFocus((f.focus + 1) % fieldCount)
+		f.fileCursor = 0
 		return m, nil
 	case "shift+tab":
 		f.setFocus((f.focus + fieldCount - 1) % fieldCount)
@@ -451,16 +461,36 @@ func (m model) handleCreateKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if f.focus == fieldDesc && (up && f.desc.Line() > 0 || !up && f.desc.Line() < f.desc.LineCount()-1) {
 			break
 		}
+		// In the files, through them to "Add new…".
+		if f.focus == fieldAttach && (up && f.fileCursor > 0 || !up && f.fileCursor < len(f.files)) {
+			if up {
+				f.fileCursor--
+			} else {
+				f.fileCursor++
+			}
+			return m, nil
+		}
 		if up && f.focus > 0 {
 			f.setFocus(f.focus - 1)
+			f.fileCursor = len(f.files) // from below: "Add new…"
 		} else if !up && f.focus < fieldCount-1 {
 			f.setFocus(f.focus + 1)
+			f.fileCursor = 0
 		}
 		return m, nil
+	case "x", "delete", "backspace":
+		if f.focus == fieldAttach && f.fileCursor < len(f.files) {
+			f.files = append(f.files[:f.fileCursor:f.fileCursor], f.files[f.fileCursor+1:]...)
+			return m, nil
+		}
 	case "enter":
 		switch {
 		case f.focus == fieldTitle:
 			return m.submit()
+		case f.focus == fieldAttach && f.fileCursor >= len(f.files):
+			return m.attach()
+		case f.focus == fieldAttach:
+			return m, nil
 		case choiceField:
 			m.openPick("")
 			return m, nil
@@ -497,6 +527,7 @@ func (m model) submit() (tea.Model, tea.Cmd) {
 		TeamID: f.teamID, Title: strings.TrimSpace(f.title.Value()), Description: strings.TrimSpace(f.desc.Value()),
 		ProjectID: f.projectID, StateID: f.stateID, Priority: f.priority, AssignToMe: f.assignMe,
 	}
+	files := f.files
 	// The status shown is the one sent, the team's default included: with
 	// none given, Linear puts an issue made through its API in Triage on a
 	// team that has it on, not where the form said it would go.
@@ -517,8 +548,19 @@ func (m model) submit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.mode, m.err, m.status = modeBusy, "", "Creating "+shorten(in.Title, 40)+"…"
+	if len(files) > 0 {
+		n := "a file"
+		if len(files) > 1 {
+			n = strconv.Itoa(len(files)) + " files"
+		}
+		m.status = "Uploading " + n + " and creating " + shorten(in.Title, 40) + "…"
+	}
 	client, ctx, gen := m.client, m.ctx, m.gen
 	return m, tea.Batch(m.spin.Tick, func() tea.Msg {
+		in, err := withAttachments(ctx, client, in, files)
+		if err != nil {
+			return createdMsg{issue{}, err, gen}
+		}
 		is, err := client.createIssue(ctx, in)
 		return createdMsg{is, err, gen}
 	})
@@ -574,6 +616,16 @@ func (m model) viewCreate() string {
 			d.SetWidth(w)
 			indent := "\n" + strings.Repeat(" ", lipgloss.Width(lead))
 			b.WriteString(lead + strings.ReplaceAll(d.View(), "\n", indent) + "\n")
+		case fieldAttach:
+			indent := strings.Repeat(" ", lipgloss.Width(lead))
+			for j, line := range m.viewFiles(i == f.focus, w) {
+				if j == 0 {
+					b.WriteString(lead + line + "\n")
+				} else {
+					b.WriteString(indent + line + "\n")
+				}
+			}
+			b.WriteString("\n") // apart from the choices under it
 		default:
 			b.WriteString(lead + m.viewChosen(i, i == f.focus) + "\n")
 		}
@@ -584,6 +636,30 @@ func (m model) viewCreate() string {
 		b.WriteString(m.viewPick(max(1, room)))
 	}
 	return b.String()
+}
+
+// addNew is the Files field's last row: a key or a click attaches more.
+const addNew = "+ Add new…"
+
+// viewFiles is the Files field's rows: each file, then "Add new…".
+func (m model) viewFiles(focused bool, w int) []string {
+	f := m.form
+	var out []string
+	for i, p := range f.files {
+		line := styleDim.Render("· ") + shorten(fileLabel(p), max(10, w-14))
+		if focused && i == f.fileCursor {
+			line = styleTree.Render("▸ ") + styleHeader.Render(filepath.Base(p)) + strings.TrimPrefix(fileLabel(p), filepath.Base(p))
+			line += styleDim.Render("   x remove")
+		}
+		out = append(out, line)
+	}
+	add := styleDim.Render(addNew)
+	if focused && f.fileCursor >= len(f.files) {
+		add = styleTree.Render(addNew) + styleDim.Render("   enter or ^f · a file here, or from your machine")
+	} else if len(f.files) == 0 {
+		add += styleDim.Render("   ^f")
+	}
+	return append(out, add)
 }
 
 func (m model) viewChosen(field int, focused bool) string {
@@ -664,8 +740,10 @@ func (m model) createFooter() []hint {
 	case f.picking:
 		return []hint{{"↑↓ choose", "", hintView}, {"enter pick", "enter", hintGo}, {"esc back", "esc", hintQuiet}}
 	case f.focus == fieldTitle:
-		return []hint{{"enter create", "enter", hintAct}, {"tab next", "tab", hintView}, {"esc cancel", "esc", hintQuiet}}
+		return []hint{{"enter create", "enter", hintAct}, {"^f attach", "ctrl+f", hintAct}, {"tab next", "tab", hintView}, {"esc cancel", "esc", hintQuiet}}
+	case f.focus == fieldAttach && f.fileCursor < len(f.files):
+		return []hint{{"^s create", "ctrl+s", hintAct}, {"x remove", "x", hintRisk}, {"^f attach", "ctrl+f", hintAct}, {"tab next", "tab", hintView}, {"esc cancel", "esc", hintQuiet}}
 	default:
-		return []hint{{"^s create", "ctrl+s", hintAct}, {"tab next", "tab", hintView}, {"esc cancel", "esc", hintQuiet}}
+		return []hint{{"^s create", "ctrl+s", hintAct}, {"^f attach", "ctrl+f", hintAct}, {"tab next", "tab", hintView}, {"esc cancel", "esc", hintQuiet}}
 	}
 }
