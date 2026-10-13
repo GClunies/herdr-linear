@@ -32,6 +32,7 @@ worktree, and the issue handed to the agent that opens there.
 This is one of four plugins that are useful alone and better together.
 Install [herdr-recap](https://github.com/mrolafsson/herdr-recap), [herdr-github](https://github.com/mrolafsson/herdr-github) or [herdr-snooze](https://github.com/mrolafsson/herdr-snooze) alongside it and they find each other:
 there is nothing to configure.
+[herdr-overwatch](https://github.com/mrolafsson/herdr-overwatch) installs all four at once, with a key bound to each.
 
 | Plugin | What it adds to the others |
 | --- | --- |
