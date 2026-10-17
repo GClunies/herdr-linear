@@ -202,7 +202,40 @@ fragment IssueFields on Issue {
   assignee { id displayName isMe }
 }`
 
-const openStates = `{ state: { type: { nin: ["completed", "canceled"] } } }`
+// notDone matches an issue state or project status that isn't finished.
+var notDone = map[string]any{"type": map[string]any{"nin": []string{"completed", "canceled"}}}
+
+// openIssues is the IssueFilter for issues still to do.
+var openIssues = map[string]any{"state": notDone}
+
+// issues is base, an IssueFilter, narrowed to f's teams.
+func (f listFilter) issues(base map[string]any) map[string]any {
+	if len(f.Teams) == 0 {
+		return base
+	}
+	narrowed := map[string]any{"team": map[string]any{"key": map[string]any{"in": f.Teams}}}
+	for k, v := range base {
+		narrowed[k] = v
+	}
+	return narrowed
+}
+
+// projects is the ProjectFilter for the Projects tab: open projects, and
+// with a filter set, those in its teams or that you're a member of.
+func (f listFilter) projects() map[string]any {
+	pf := map[string]any{"status": notDone}
+	var either []map[string]any
+	if len(f.Teams) > 0 {
+		either = append(either, map[string]any{"accessibleTeams": map[string]any{"some": map[string]any{"key": map[string]any{"in": f.Teams}}}})
+	}
+	if f.MemberProjects {
+		either = append(either, map[string]any{"members": map[string]any{"some": map[string]any{"isMe": map[string]any{"eq": true}}}})
+	}
+	if len(either) > 0 {
+		pf["or"] = either
+	}
+	return pf
+}
 
 // ── paging ────────────────────────────────────────────────────────────────────
 
@@ -269,9 +302,10 @@ func (c *linearClient) myIssues(ctx context.Context) ([]issue, error) {
 			AssignedIssues connection[issue] `json:"assignedIssues"`
 		} `json:"viewer"`
 	}
-	q := `query($after: String) { viewer { assignedIssues(first: 100, after: $after, orderBy: updatedAt, filter: ` + openStates + `) {
+	q := `query($after: String, $filter: IssueFilter) { viewer { assignedIssues(first: 100, after: $after, orderBy: updatedAt, filter: $filter) {
   nodes { ...IssueFields } ` + pageFields + ` } } }` + issueFields
-	issues, err := fetchAll(ctx, c, q, nil, func(r *reply) *connection[issue] { return &r.Viewer.AssignedIssues })
+	vars := map[string]any{"filter": c.cfg.Filter.issues(openIssues)}
+	issues, err := fetchAll(ctx, c, q, vars, func(r *reply) *connection[issue] { return &r.Viewer.AssignedIssues })
 	sortIssues(issues)
 	return issues, err
 }
@@ -288,8 +322,9 @@ func (c *linearClient) createdIssues(ctx context.Context) ([]issue, error) {
 			} `json:"createdIssues"`
 		} `json:"viewer"`
 	}
-	q := `query($first: Int) { viewer { createdIssues(first: $first, orderBy: createdAt) { nodes { ...IssueFields } } } }` + issueFields
-	if err := c.query(ctx, q, map[string]any{"first": recentCreated}, &res); err != nil {
+	q := `query($first: Int, $filter: IssueFilter) { viewer { createdIssues(first: $first, orderBy: createdAt, filter: $filter) { nodes { ...IssueFields } } } }` + issueFields
+	vars := map[string]any{"first": recentCreated, "filter": c.cfg.Filter.issues(nil)}
+	if err := c.query(ctx, q, vars, &res); err != nil {
 		return nil, err
 	}
 	return res.Viewer.CreatedIssues.Nodes, nil
@@ -301,9 +336,10 @@ func (c *linearClient) projectIssues(ctx context.Context, projectID string) ([]i
 			Issues connection[issue] `json:"issues"`
 		} `json:"project"`
 	}
-	q := `query($id: String!, $after: String) { project(id: $id) { issues(first: 100, after: $after, orderBy: updatedAt, filter: ` + openStates + `) {
+	q := `query($id: String!, $after: String, $filter: IssueFilter) { project(id: $id) { issues(first: 100, after: $after, orderBy: updatedAt, filter: $filter) {
   nodes { ...IssueFields } ` + pageFields + ` } } }` + issueFields
-	issues, err := fetchAll(ctx, c, q, map[string]any{"id": projectID}, func(r *reply) *connection[issue] { return &r.Project.Issues })
+	vars := map[string]any{"id": projectID, "filter": openIssues}
+	issues, err := fetchAll(ctx, c, q, vars, func(r *reply) *connection[issue] { return &r.Project.Issues })
 	sortIssues(issues)
 	return issues, err
 }
@@ -312,11 +348,12 @@ func (c *linearClient) projects(ctx context.Context) ([]project, error) {
 	type reply struct {
 		Projects connection[project] `json:"projects"`
 	}
-	q := `query($after: String) { projects(first: 100, after: $after, orderBy: updatedAt, filter: { status: { type: { nin: ["completed", "canceled"] } } }) {
+	q := `query($after: String, $filter: ProjectFilter) { projects(first: 100, after: $after, orderBy: updatedAt, filter: $filter) {
   nodes { id name slugId url color progress targetDate status { name type color } lead { isMe } teams(first: 25) { nodes { id key } } }
   ` + pageFields + `
 } }`
-	ps, err := fetchAll(ctx, c, q, nil, func(r *reply) *connection[project] { return &r.Projects })
+	vars := map[string]any{"filter": c.cfg.Filter.projects()}
+	ps, err := fetchAll(ctx, c, q, vars, func(r *reply) *connection[project] { return &r.Projects })
 	sortProjects(ps)
 	return ps, err
 }

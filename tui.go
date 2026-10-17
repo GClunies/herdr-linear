@@ -288,7 +288,7 @@ func (m model) useWorkspace(w workspace, remember bool) (model, tea.Cmd) {
 	m.form, m.created, m.teamList = issueForm{}, nil, nil
 	m.mode = modeLoading
 	if m.cache {
-		m = m.useCache(readListCache(w.ID))
+		m = m.useCache(readListCache(w.ID, m.cfg.Filter))
 	}
 	// Every tab's list, so each says how many it has before you go to it.
 	cmds := []tea.Cmd{m.spin.Tick, m.loadIssues(), m.loadProjects(), m.loadRecent(), m.loadWorktrees()}
@@ -331,8 +331,8 @@ func (m model) keep(t tab, issues []issue, projects []project, err error) tea.Cm
 	if !m.cache || m.ws == nil || err != nil { // not one cut short, either
 		return nil
 	}
-	id := m.ws.ID
-	return func() tea.Msg { saveListCache(id, t, issues, projects); return nil }
+	id, f := m.ws.ID, m.cfg.Filter
+	return func() tea.Msg { saveListCache(id, f, t, issues, projects); return nil }
 }
 
 // targetMsg is the issue the popup was opened on, found (or not).

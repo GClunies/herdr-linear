@@ -525,6 +525,7 @@ herdr plugin config-dir herdr-linear
 ```json
 {
   "repos": { "ENG": "~/code/app", "WEB": "~/code/website" },
+  "filter": { "teams": ["ENG", "WEB"], "member_projects": true },
   "base": "origin/main",
   "project_start_prompt": "Work on the Linear project at {url}",
   "agent_wait_seconds": 90,
@@ -535,6 +536,7 @@ herdr plugin config-dir herdr-linear
 | key                  | default                    | what it does                                                                                     |
 |----------------------|----------------------------|--------------------------------------------------------------------------------------------------|
 | `repos`              | none                       | Linear team key → checkout. Used for that team's worktrees wherever you open the picker. With more than one workspace, `"acme/ENG"` is team ENG in workspace `acme` only, and wins over a plain `"ENG"`. |
+| `filter`             | every team                 | Narrows My issues, Projects and Recent. `teams`: only these team keys' issues and projects. `member_projects`: `true` lists the projects you're a member of as well, in any team. A project's own issues, and an issue number typed in the filter, still show every team. The new-issue form offers the projects the Projects tab lists. |
 | `base`               | the remote's default branch | What new branches start from. Fetched first when it's a remote branch.                          |
 | `start_prompt`       | `/ticket` where there's one, else a plain prompt | What **start** types into the new worktree's agent. `{identifier}`, `{title}`, `{url}` are filled in. See [Start](#start), and the note on `{title}` there. |
 | `project_start_prompt` | `Work on the Linear project at {url}` | What starting a project types into its new worktree's agent. `{name}`, `{url}` are filled in. |

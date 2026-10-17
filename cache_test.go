@@ -62,7 +62,7 @@ func TestThePopupOpensOnTheListsFromLastTime(t *testing.T) {
 func TestListsAreKeptByWorkspace(t *testing.T) {
 	t.Setenv("HERDR_PLUGIN_STATE_DIR", t.TempDir())
 	acme, globex := workspace{ID: "ws-acme", Name: "Acme"}, workspace{ID: "ws-globex", Name: "Globex"}
-	saveListCache(acme.ID, tabMine, withIDs(twoGroups()).issues, nil)
+	saveListCache(acme.ID, listFilter{}, tabMine, withIDs(twoGroups()).issues, nil)
 
 	if m := cachedModel(t, globex); m.mode != modeLoading || len(m.rows()) != 0 {
 		t.Fatalf("Globex opened on Acme's issues: %+v", m.rows())
@@ -76,6 +76,24 @@ func TestListsAreKeptByWorkspace(t *testing.T) {
 	}
 	if _, err := os.Stat(listCachePath()); !os.IsNotExist(err) {
 		t.Fatalf("lists.json left behind: %v", err)
+	}
+}
+
+// Lists kept under one filter aren't shown under another: they'd list what
+// the filter leaves out.
+func TestListsAreKeptByFilter(t *testing.T) {
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", t.TempDir())
+	acme := workspace{ID: "ws-acme"}
+	saveListCache(acme.ID, listFilter{}, tabMine, withIDs(twoGroups()).issues, nil)
+
+	m := newModel(context.Background(), config{Filter: listFilter{Teams: []string{"WEB"}}}, "/repo")
+	m.width, m.height, m.cache = 100, 20, true
+	if m, _ = m.useWorkspace(acme, false); len(m.rows()) != 0 {
+		t.Fatalf("opened on the unfiltered lists: %+v", m.rows())
+	}
+	saveListCache(acme.ID, listFilter{Teams: []string{"WEB"}}, tabRecent, nil, nil)
+	if c := readListCache(acme.ID, listFilter{Teams: []string{"WEB"}}); c.Mine != nil || c.Recent == nil {
+		t.Fatalf("kept %+v", c)
 	}
 }
 

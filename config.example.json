@@ -3,6 +3,10 @@
     "ENG": "~/code/app",
     "WEB": "~/code/website"
   },
+  "filter": {
+    "teams": ["ENG", "WEB"],
+    "member_projects": true
+  },
   "base": "origin/main",
   "project_start_prompt": "Work on the Linear project at {url}",
   "agent_wait_seconds": 90,

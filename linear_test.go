@@ -122,6 +122,75 @@ func TestQuerySurfacesGraphQLErrors(t *testing.T) {
 	}
 }
 
+// TestListsAskLinearForTheConfiguredFilter checks the filter each list sends,
+// as JSON: Linear applies it, so a list fetches only what it shows. A
+// project's own issues stay everyone's.
+func TestListsAskLinearForTheConfiguredFilter(t *testing.T) {
+	const (
+		open        = `"state":{"type":{"nin":["completed","canceled"]}}`
+		openProject = `"status":{"type":{"nin":["completed","canceled"]}}`
+		inTeams     = `"team":{"key":{"in":["PD","DATA"]}}`
+	)
+	for _, tc := range []struct {
+		name                    string
+		filter                  listFilter
+		mine, created, projects string
+	}{
+		{"none", listFilter{}, `{` + open + `}`, `null`, `{` + openProject + `}`},
+		{"teams and member projects", listFilter{Teams: []string{"PD", "DATA"}, MemberProjects: true},
+			`{` + open + `,` + inTeams + `}`,
+			`{` + inTeams + `}`,
+			`{"or":[{"accessibleTeams":{"some":{"key":{"in":["PD","DATA"]}}}},{"members":{"some":{"isMe":{"eq":true}}}}],` + openProject + `}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeStore(t, &tokens{AccessToken: "a", ExpiresAt: time.Now().Add(time.Hour)})
+			var sent []string
+			record := func(data map[string]any) func(http.ResponseWriter, *http.Request) {
+				return func(w http.ResponseWriter, r *http.Request) {
+					var body struct {
+						Variables struct {
+							Filter json.RawMessage `json:"filter"`
+						} `json:"variables"`
+					}
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					var f any
+					_ = json.Unmarshal(body.Variables.Filter, &f)
+					canonical, _ := json.Marshal(f) // sorted keys
+					sent = append(sent, string(canonical))
+					reply(200, map[string]any{"data": data})(w, r)
+				}
+			}
+			empty := map[string]any{"nodes": []any{}}
+			fakeLinear(t,
+				record(map[string]any{"viewer": map[string]any{"assignedIssues": empty}}),
+				record(map[string]any{"viewer": map[string]any{"createdIssues": empty}}),
+				record(map[string]any{"projects": empty}),
+				record(map[string]any{"project": map[string]any{"issues": empty}}),
+			)
+			c := &linearClient{cfg: config{Filter: tc.filter}}
+			ctx := context.Background()
+			if _, err := c.myIssues(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.createdIssues(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.projects(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.projectIssues(ctx, "p1"); err != nil {
+				t.Fatal(err)
+			}
+			want := []string{tc.mine, tc.created, tc.projects, `{` + open + `}`}
+			for i, name := range []string{"My issues", "Recent", "Projects", "A project's issues"} {
+				if sent[i] != want[i] {
+					t.Errorf("%s filter\n got %s\nwant %s", name, sent[i], want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestStartIssueMovesToFirstStartedStateAndClaims(t *testing.T) {
 	fakeStore(t, &tokens{AccessToken: "a", ExpiresAt: time.Now().Add(time.Hour)})
 	var mutation map[string]any

@@ -48,6 +48,24 @@ func TestQuickAddFromTheList(t *testing.T) {
 	}
 }
 
+// A new issue in a team the filter leaves out stays out of My issues and
+// Recent, as Linear's next answer would.
+func TestQuickAddKeepsToTheFilter(t *testing.T) {
+	m := demoModel(t)
+	m.cfg.Filter = listFilter{Teams: []string{"WEB"}}
+	if !m.loaded[tabRecent] {
+		t.Fatal("Recent didn't load")
+	}
+	mine, recent := len(m.issues), len(m.recent)
+	m = press(typeText(press(m, "ctrl+c"), "Undo for deleted notes"), "enter")
+	if m.created == nil || m.created.Team.Key != "HAL" {
+		t.Fatalf("created %+v err %q", m.created, m.err)
+	}
+	if len(m.issues) != mine || len(m.recent) != recent {
+		t.Fatalf("My issues %d → %d, Recent %d → %d", mine, len(m.issues), recent, len(m.recent))
+	}
+}
+
 func TestQuickAddNeedsATitle(t *testing.T) {
 	m := press(press(demoModel(t), "ctrl+c"), "enter")
 	if m.screen != screenCreate || m.err == "" {

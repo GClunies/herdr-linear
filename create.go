@@ -209,14 +209,15 @@ func (m model) updateCreate(msg tea.Msg) (model, tea.Cmd, bool) {
 
 // addCreated lists the new issue where it belongs, without a refetch.
 func (m *model) addCreated(is issue) {
-	if m.loaded[tabRecent] {
+	inFilter := m.cfg.Filter.hasTeam(is.Team.Key)
+	if m.loaded[tabRecent] && inFilter {
 		m.recent = append([]issue{is}, m.recent...)
 	}
 	if !isOpenState(is.State.Type) {
 		m.clampCursor()
 		return
 	}
-	if is.Assignee != nil && is.Assignee.IsMe {
+	if is.Assignee != nil && is.Assignee.IsMe && inFilter {
 		m.issues = append(m.issues, is)
 		sortIssues(m.issues)
 	}

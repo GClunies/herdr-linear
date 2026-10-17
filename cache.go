@@ -20,10 +20,11 @@ type listCache struct {
 	Workspaces map[string]*cachedLists `json:"workspaces"`
 }
 
-// cachedLists are one workspace's. A list that was never loaded is nil,
-// which an empty one isn't.
+// cachedLists are one workspace's, as Filter narrowed them. A list that was
+// never loaded is nil, which an empty one isn't.
 type cachedLists struct {
 	Saved    time.Time  `json:"saved"`
+	Filter   listFilter `json:"filter"`
 	Mine     *[]issue   `json:"mine,omitempty"`
 	Projects *[]project `json:"projects,omitempty"`
 	Recent   *[]issue   `json:"recent,omitempty"`
@@ -53,24 +54,26 @@ func writeListCacheFile(c listCache) {
 	}
 }
 
-// readListCache returns the lists workspace id had last time, if any.
-func readListCache(id string) cachedLists {
+// readListCache returns the lists workspace id had last time under filter f,
+// if any.
+func readListCache(id string, f listFilter) cachedLists {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
-	if c := readListCacheFile().Workspaces[id]; c != nil {
+	if c := readListCacheFile().Workspaces[id]; c != nil && c.Filter.equal(f) {
 		return *c
 	}
 	return cachedLists{}
 }
 
-// saveListCache stores one tab's list for workspace id, keeping the others.
-func saveListCache(id string, t tab, issues []issue, projects []project) {
+// saveListCache stores one tab's list for workspace id, filtered by f,
+// keeping the others when they were filtered the same way.
+func saveListCache(id string, f listFilter, t tab, issues []issue, projects []project) {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
 	c := readListCacheFile()
 	ws := c.Workspaces[id]
-	if ws == nil {
-		ws = &cachedLists{}
+	if ws == nil || !ws.Filter.equal(f) {
+		ws = &cachedLists{Filter: f}
 		c.Workspaces[id] = ws
 	}
 	// Never null in the file: an empty list is one that loaded.
