@@ -12,12 +12,25 @@ func TestIssueTargetUsesLinearBranchName(t *testing.T) {
 	is.BranchName = "hjortur/act-42-fix-the-thing"
 	is.Team.Key = "ACT"
 	got := issueTarget(is)
-	if got.Branch != "hjortur/act-42-fix-the-thing" || got.TeamKey != "ACT" || !strings.HasPrefix(got.Label, "ACT-42 ") {
+	if got.Branch != "hjortur/act-42-fix-the-thing" || got.TeamKey != "ACT" || got.Label != "ACT-42 | title ACT-42" {
 		t.Fatalf("%+v", got)
 	}
 	is.BranchName = ""
 	if got := issueTarget(is); got.Branch != "act-42" {
 		t.Fatalf("fallback branch %q", got.Branch)
+	}
+}
+
+func TestIssueTargetLabelNamesProjectOnce(t *testing.T) {
+	is := mkIssue("PD-501", "started", "In Progress", 0, 0)
+	is.Project = &projectRef{Name: "Claude Analytics"}
+	is.Title = "claude analytics: store an API key"
+	if got := issueTarget(is).Label; got != "PD-501 | Claude Analytics | store an API key" {
+		t.Fatalf("prefixed title: %q", got)
+	}
+	is.Title = "Add deploy-dashboards-prod.yml for author-run prod releases"
+	if got := issueTarget(is).Label; got != "PD-501 | Claude Analytics | Add deploy-dashboar…" {
+		t.Fatalf("long title: %q", got)
 	}
 }
 
