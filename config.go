@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 )
 
@@ -44,26 +43,6 @@ type config struct {
 	// LabelRefreshSeconds is how old an issue's status may get before a
 	// tick asks Linear again.
 	LabelRefreshSeconds int `json:"label_refresh_seconds"`
-	// Filter narrows My issues, Projects and Recent to part of the
-	// workspace.
-	Filter listFilter `json:"filter"`
-}
-
-// listFilter narrows the lists. The zero value lists everything.
-type listFilter struct {
-	// Teams: only these teams' issues and projects. Empty: every team's.
-	Teams []string `json:"teams"`
-	// MemberProjects lists the projects you're a member of as well, in any
-	// team.
-	MemberProjects bool `json:"member_projects"`
-}
-
-func (f listFilter) hasTeam(key string) bool {
-	return len(f.Teams) == 0 || slices.Contains(f.Teams, key)
-}
-
-func (f listFilter) equal(g listFilter) bool {
-	return slices.Equal(f.Teams, g.Teams) && f.MemberProjects == g.MemberProjects
 }
 
 func (c config) labelsOn() bool { return c.Labels == nil || *c.Labels }

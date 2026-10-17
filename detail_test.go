@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -187,6 +188,60 @@ func TestProjectScreenDrillsIntoIssues(t *testing.T) {
 	m = next.(model)
 	if m.screen != screenList || m.drilled == nil || m.drilled.ID != "p1" || cmd == nil {
 		t.Fatalf("screen %v drilled %+v", m.screen, m.drilled)
+	}
+}
+
+func TestProjectStatusPickerMovesTheProjectAndRegroupsTheList(t *testing.T) {
+	m := press(press(demoModel(t), "tab"), "enter") // Offline sync, In Progress
+	m = press(m, "c")
+	if m.screen != screenProjectStatus || m.stateCursor != 0 {
+		t.Fatalf("picker should open on the current status: screen %v cursor %d", m.screen, m.stateCursor)
+	}
+	// As the Projects tab groups them.
+	if s := screenText(m); !regexp.MustCompile(`(?s)In Progress  current.*Planned.*Paused.*Backlog.*Canceled.*Completed`).MatchString(s) {
+		t.Fatalf("picker:\n%s", s)
+	}
+	if m = press(m, "enter"); m.screen != screenProject || m.flash != "" || m.mode != modeList {
+		t.Fatalf("the current status: screen %v flash %q mode %v", m.screen, m.flash, m.mode)
+	}
+	if m = press(press(m, "c"), "esc"); m.screen != screenProject {
+		t.Fatalf("esc: screen %v", m.screen)
+	}
+
+	m = press(press(press(m, "c"), "down"), "enter") // → Planned
+	if m.curProject.Status.Name != "Planned" || m.flash != "Moved to Planned" {
+		t.Fatalf("status %+v flash %q err %q", m.curProject.Status, m.flash, m.err)
+	}
+	ps, _ := m.client.projects(context.Background(), listFilter{})
+	for _, p := range ps {
+		if p.ID == "a1f3" && p.Status.Name != "Planned" {
+			t.Fatalf("the demo kept %s", p.Status.Name)
+		}
+	}
+	want := "#In Progress 1 Search 2.0 _ #Planned 2 Offline sync Export everything _ #Paused 1 Platform hardening _ #Backlog 1 Home screen widgets"
+	if got := listShape(press(m, "esc")); got != want {
+		t.Fatalf("rows:\n got %s\nwant %s", got, want)
+	}
+}
+
+// The Projects tab lists open projects: a completed one leaves it, and the
+// screen you're on keeps showing it.
+func TestCompletingAProjectTakesItOffTheList(t *testing.T) {
+	m := press(press(press(demoModel(t), "tab"), "enter"), "c")
+	for range 9 {
+		m = press(m, "down") // the last: Completed
+	}
+	m = press(m, "enter")
+	if m.screen != screenProject || m.flash != "Moved to Completed" || !strings.Contains(screenText(m), "Offline sync") {
+		t.Fatalf("screen %v flash %q:\n%s", m.screen, m.flash, screenText(m))
+	}
+	for _, p := range m.projects {
+		if p.ID == "a1f3" {
+			t.Fatal("a completed project is still listed")
+		}
+	}
+	if len(m.projects) != 4 {
+		t.Fatalf("%d projects, want 4", len(m.projects))
 	}
 }
 

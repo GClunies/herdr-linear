@@ -121,16 +121,21 @@ func (m model) openCreate(p *project, keep *issueForm) (tea.Model, tea.Cmd) {
 	}
 	cmds := []tea.Cmd{m.loadFormStates()}
 	if m.teamList == nil {
-		client, ctx, gen := m.client, m.ctx, m.gen
-		cmds = append(cmds, func() tea.Msg {
-			ts, err := client.teams(ctx)
-			return teamsMsg{ts, err, gen}
-		})
+		cmds = append(cmds, m.loadTeams())
 	}
 	if !m.loaded[tabProjects] {
 		cmds = append(cmds, m.loadProjects())
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// loadTeams fetches the workspace's teams, for the form and the team filter.
+func (m model) loadTeams() tea.Cmd {
+	client, ctx, gen := m.client, m.ctx, m.gen
+	return func() tea.Msg {
+		ts, err := client.teams(ctx)
+		return teamsMsg{ts, err, gen}
+	}
 }
 
 // defaultTeam is the team most of your issues are in, else the first.
@@ -209,7 +214,7 @@ func (m model) updateCreate(msg tea.Msg) (model, tea.Cmd, bool) {
 
 // addCreated lists the new issue where it belongs, without a refetch.
 func (m *model) addCreated(is issue) {
-	inFilter := m.cfg.Filter.hasTeam(is.Team.Key)
+	inFilter := m.teamFilter.hasTeam(is.Team.Key)
 	if m.loaded[tabRecent] && inFilter {
 		m.recent = append([]issue{is}, m.recent...)
 	}

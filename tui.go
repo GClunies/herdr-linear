@@ -224,21 +224,27 @@ type model struct {
 	pasted      chan string
 
 	// Detail screens (detail.go).
-	screen      screen
-	cur         *issue
-	curDetail   *issueDetail
-	curProject  *project
-	projDetail  *projectDetail
-	states      map[string][]workflowState // by team id, fetched once
-	stateCursor int
-	flash       string // a one-line confirmation, e.g. "Copied …"
-	md          *markdown
-	scroll      int // first shown line of the detail screen's description
+	screen       screen
+	cur          *issue
+	curDetail    *issueDetail
+	curProject   *project
+	projDetail   *projectDetail
+	states       map[string][]workflowState // by team id, fetched once
+	projStatuses []projectStatus            // the workspace's, fetched once
+	stateCursor  int
+	flash        string // a one-line confirmation, e.g. "Copied …"
+	md           *markdown
+	scroll       int // first shown line of the detail screen's description
 
 	// Quick add (create.go).
 	form     issueForm
 	created  *issue     // the issue just created, on its screen
 	teamList []teamInfo // fetched once per workspace
+
+	// The team filter (filter.go): the teams the lists are narrowed to, the
+	// workspace's default until ctrl+f changes them, and their editor.
+	teamFilter listFilter
+	editor     filterEditor
 
 	mouseX, mouseY int // last pointer position; -1 until the mouse moves
 }
@@ -277,24 +283,16 @@ func (m model) loadWorkspaces() tea.Cmd {
 // useWorkspace shows w, forgetting what the last one loaded, and with
 // remember saves it as this repo's workspace.
 func (m model) useWorkspace(w workspace, remember bool) (model, tea.Cmd) {
-	m.ws, m.gen = &w, m.gen+1
+	m.ws = &w
 	m.cfg = m.baseCfg.forWorkspace(w.URLKey)
 	m.client = &linearClient{cfg: m.cfg, ws: w}
-	m.issues, m.projects, m.recent, m.drilled, m.projIss = nil, nil, nil, nil, nil
-	m.lookup, m.lookupFor, m.lookingUp = nil, "", ""
-	m.loaded, m.stale, m.states = map[tab]bool{}, map[tab]bool{}, map[string][]workflowState{}
-	m.screen, m.cursor, m.offset, m.chose, m.err, m.flash = screenList, 0, 0, false, "", ""
+	m.teamFilter = savedFilter(w.ID)
+	m.states, m.projStatuses = map[string][]workflowState{}, nil
+	m.screen, m.flash = screenList, ""
 	m.cur, m.curDetail, m.curProject, m.projDetail = nil, nil, nil, nil
 	m.form, m.created, m.teamList = issueForm{}, nil, nil
-	m.mode = modeLoading
-	if m.cache {
-		m = m.useCache(readListCache(w.ID, m.cfg.Filter))
-	}
-	// Every tab's list, so each says how many it has before you go to it.
-	cmds := []tea.Cmd{m.spin.Tick, m.loadIssues(), m.loadProjects(), m.loadRecent(), m.loadWorktrees()}
-	if m.target != nil {
-		cmds = append(cmds, m.findTarget(*m.target))
-	}
+	m, cmd := m.relist()
+	cmds := []tea.Cmd{cmd}
 	if remember && m.repo != "" {
 		ctx, repo := m.ctx, m.repo
 		m.index.remember(repo, w.ID)
@@ -304,6 +302,27 @@ func (m model) useWorkspace(w workspace, remember bool) (model, tea.Cmd) {
 			}
 			return nil
 		})
+	}
+	return m, tea.Batch(cmds...)
+}
+
+// relist forgets the lists and asks Linear for them again, as teamFilter
+// narrows them, under a new gen: replies still on their way for the old
+// ones are dropped.
+func (m model) relist() (model, tea.Cmd) {
+	m.gen++
+	m.issues, m.projects, m.recent, m.drilled, m.projIss = nil, nil, nil, nil, nil
+	m.lookup, m.lookupFor, m.lookingUp = nil, "", ""
+	m.loaded, m.stale = map[tab]bool{}, map[tab]bool{}
+	m.cursor, m.offset, m.chose, m.err = 0, 0, false, ""
+	m.mode = modeLoading
+	if m.cache {
+		m = m.useCache(readListCache(m.ws.ID, m.teamFilter))
+	}
+	// Every tab's list, so each says how many it has before you go to it.
+	cmds := []tea.Cmd{m.spin.Tick, m.loadIssues(), m.loadProjects(), m.loadRecent(), m.loadWorktrees()}
+	if m.target != nil {
+		cmds = append(cmds, m.findTarget(*m.target))
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -331,8 +350,15 @@ func (m model) keep(t tab, issues []issue, projects []project, err error) tea.Cm
 	if !m.cache || m.ws == nil || err != nil { // not one cut short, either
 		return nil
 	}
-	id, f := m.ws.ID, m.cfg.Filter
-	return func() tea.Msg { saveListCache(id, f, t, issues, projects); return nil }
+	id, f := m.ws.ID, m.teamFilter
+	return func() tea.Msg {
+		// Only the default filter's: the next popup opens on it, and an
+		// unsaved filter's lists would take the place of its.
+		if savedFilter(id).equal(f) {
+			saveListCache(id, f, t, issues, projects)
+		}
+		return nil
+	}
 }
 
 // targetMsg is the issue the popup was opened on, found (or not).
@@ -384,21 +410,21 @@ func (m model) chooseWorkspace() model {
 
 func (m model) loadIssues() tea.Cmd {
 	return func() tea.Msg {
-		is, err := m.client.myIssues(m.ctx)
+		is, err := m.client.myIssues(m.ctx, m.teamFilter)
 		return issuesMsg{is, err, m.gen}
 	}
 }
 
 func (m model) loadRecent() tea.Cmd {
 	return func() tea.Msg {
-		is, err := m.client.createdIssues(m.ctx)
+		is, err := m.client.createdIssues(m.ctx, m.teamFilter)
 		return recentMsg{is, err, m.gen}
 	}
 }
 
 func (m model) loadProjects() tea.Cmd {
 	return func() tea.Msg {
-		ps, err := m.client.projects(m.ctx)
+		ps, err := m.client.projects(m.ctx, m.teamFilter)
 		return projectsMsg{ps, err, m.gen}
 	}
 }
@@ -750,9 +776,10 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if k.String() == "esc" {
 			return m.leave()
 		}
-		// A load in flight doesn't lock the tabs; its reply still lands.
+		// A load in flight doesn't lock the tabs, or the teams it's for;
+		// its reply still lands.
 		switch k.String() {
-		case "tab", "shift+tab", "left", "right":
+		case "tab", "shift+tab", "left", "right", "ctrl+f":
 			if m.mode == modeBusy || m.screen != screenList {
 				return m, nil
 			}
@@ -762,6 +789,9 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.screen == screenCreate || m.screen == screenCreated {
 		return m.handleCreateKey(k)
+	}
+	if m.screen == screenFilter {
+		return m.handleFilterKey(k)
 	}
 	if m.screen != screenList {
 		return m.handleDetailKey(k)
@@ -786,6 +816,8 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.chooseWorkspace(), nil
 		}
 		return m, nil
+	case "ctrl+f":
+		return m.openFilter()
 	case "tab", "shift+tab":
 		step := tab(1)
 		if k.String() == "shift+tab" {
@@ -1304,12 +1336,14 @@ func (m model) view() string {
 	if m.screen != screenList {
 		b.WriteString("\n")
 		switch m.screen {
-		case screenProject:
+		case screenProject, screenProjectStatus:
 			b.WriteString(m.viewProject())
 		case screenCreate:
 			b.WriteString(m.viewCreate())
 		case screenCreated:
 			b.WriteString(m.viewCreated())
+		case screenFilter:
+			b.WriteString(m.viewFilter())
 		default:
 			b.WriteString(m.viewIssue())
 		}
@@ -1578,8 +1612,10 @@ func (m model) viewTabs() string {
 		line += styleDim.Render(" › ") + styleHeader.Render("New issue")
 	case m.screen == screenCreated:
 		line += styleDim.Render(" › ") + styleHeader.Render(m.created.Identifier)
-	case m.screen == screenProject:
+	case m.screen == screenProject || m.screen == screenProjectStatus:
 		line += styleDim.Render(" › ") + styleHeader.Render(shorten(m.curProject.Name, 40))
+	case m.screen == screenFilter:
+		line += styleDim.Render(" › ") + styleHeader.Render("Teams")
 	case m.screen != screenList:
 		if m.drilled != nil {
 			line += styleDim.Render(" › " + shorten(m.drilled.Name, 30))
@@ -1594,12 +1630,27 @@ func (m model) viewTabs() string {
 	} else if _, demo := m.client.(*demoSource); demo {
 		tag = styleDim.Render("demo ")
 	}
+	teams := ""
+	if len(m.teamFilter.Teams) > 0 {
+		teams = styleText.Render(shorten(strings.Join(m.teamFilter.Teams, ", "), 30) + " ")
+		if tag != "" {
+			tag = teams + styleDim.Render("· ") + tag
+		} else {
+			tag = teams
+		}
+	}
 	// What's listed is from last time, or being refreshed.
 	for t := range m.stale {
 		if m.stale[t] && m.mode != modeBusy {
 			tag = m.spin.View() + styleDim.Render(" updating ") + tag
 			break
 		}
+	}
+	// Short of room, the teams stay: they say what the lists hold. The rest
+	// of the tag, then where you are past the tabs, give way to them.
+	if teams != "" && m.width-lipgloss.Width(line)-lipgloss.Width(tag) <= 1 {
+		tag = teams
+		line = ansi.Truncate(line, max(0, m.width-lipgloss.Width(tag)-2), "…")
 	}
 	if pad := m.width - lipgloss.Width(line) - lipgloss.Width(tag); tag != "" && pad > 1 {
 		line += strings.Repeat(" ", pad) + tag
@@ -1734,7 +1785,7 @@ func (m model) footer() []hint {
 	if m.tab == tabProjects && m.drilled == nil {
 		hs = append(hs, hint{"^w worktree", "ctrl+w", hintAct})
 	}
-	hs = append(hs, hint{"^c new issue", "ctrl+c", hintAct}, hint{"^o open in Linear", "ctrl+o", hintView}, hint{"^r refresh", "ctrl+r", hintView})
+	hs = append(hs, hint{"^c new issue", "ctrl+c", hintAct}, hint{"^o open in Linear", "ctrl+o", hintView}, hint{"^r refresh", "ctrl+r", hintView}, hint{"^f teams", "ctrl+f", hintView})
 	if len(m.index.Workspaces) > 1 {
 		hs = append(hs, hint{"^t workspace", "ctrl+t", hintView})
 	}

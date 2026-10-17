@@ -92,7 +92,7 @@ func TestQueryRefreshesOnceOnAuthErrorThenRetries(t *testing.T) {
 		}}}}}),
 	)
 	c := &linearClient{cfg: config{ClientID: "cid"}}
-	is, err := c.myIssues(context.Background())
+	is, err := c.myIssues(context.Background(), listFilter{})
 	if err != nil || len(is) != 1 || is[0].Identifier != "ACT-1" {
 		t.Fatalf("got %v, %v", is, err)
 	}
@@ -108,7 +108,7 @@ func TestQueryGivesUpAfterSecondAuthError(t *testing.T) {
 	})
 	fakeLinear(t, reply(401, map[string]any{}), reply(401, map[string]any{}))
 	c := &linearClient{cfg: config{}}
-	if _, err := c.myIssues(context.Background()); !errors.Is(err, errSignedOut) {
+	if _, err := c.myIssues(context.Background(), listFilter{}); !errors.Is(err, errSignedOut) {
 		t.Fatalf("got %v, want errSignedOut", err)
 	}
 }
@@ -117,15 +117,15 @@ func TestQuerySurfacesGraphQLErrors(t *testing.T) {
 	fakeStore(t, &tokens{AccessToken: "a", ExpiresAt: time.Now().Add(time.Hour)})
 	fakeLinear(t, reply(200, map[string]any{"errors": []any{map[string]any{"message": "Cannot query field"}}}))
 	c := &linearClient{cfg: config{}}
-	if _, err := c.projects(context.Background()); err == nil || !strings.Contains(err.Error(), "Cannot query field") {
+	if _, err := c.projects(context.Background(), listFilter{}); err == nil || !strings.Contains(err.Error(), "Cannot query field") {
 		t.Fatalf("got %v", err)
 	}
 }
 
-// TestListsAskLinearForTheConfiguredFilter checks the filter each list sends,
-// as JSON: Linear applies it, so a list fetches only what it shows. A
-// project's own issues stay everyone's.
-func TestListsAskLinearForTheConfiguredFilter(t *testing.T) {
+// TestListsAskLinearForTheTeamFilter checks the filter each list sends, as
+// JSON: Linear applies it, so a list fetches only what it shows. A project's
+// own issues stay everyone's.
+func TestListsAskLinearForTheTeamFilter(t *testing.T) {
 	const (
 		open        = `"state":{"type":{"nin":["completed","canceled"]}}`
 		openProject = `"status":{"type":{"nin":["completed","canceled"]}}`
@@ -137,10 +137,10 @@ func TestListsAskLinearForTheConfiguredFilter(t *testing.T) {
 		mine, created, projects string
 	}{
 		{"none", listFilter{}, `{` + open + `}`, `null`, `{` + openProject + `}`},
-		{"teams and member projects", listFilter{Teams: []string{"PD", "DATA"}, MemberProjects: true},
+		{"teams", listFilter{Teams: []string{"PD", "DATA"}},
 			`{` + open + `,` + inTeams + `}`,
 			`{` + inTeams + `}`,
-			`{"or":[{"accessibleTeams":{"some":{"key":{"in":["PD","DATA"]}}}},{"members":{"some":{"isMe":{"eq":true}}}}],` + openProject + `}`},
+			`{"accessibleTeams":{"some":{"key":{"in":["PD","DATA"]}}},` + openProject + `}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeStore(t, &tokens{AccessToken: "a", ExpiresAt: time.Now().Add(time.Hour)})
@@ -167,15 +167,15 @@ func TestListsAskLinearForTheConfiguredFilter(t *testing.T) {
 				record(map[string]any{"projects": empty}),
 				record(map[string]any{"project": map[string]any{"issues": empty}}),
 			)
-			c := &linearClient{cfg: config{Filter: tc.filter}}
+			c := &linearClient{}
 			ctx := context.Background()
-			if _, err := c.myIssues(ctx); err != nil {
+			if _, err := c.myIssues(ctx, tc.filter); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := c.createdIssues(ctx); err != nil {
+			if _, err := c.createdIssues(ctx, tc.filter); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := c.projects(ctx); err != nil {
+			if _, err := c.projects(ctx, tc.filter); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := c.projectIssues(ctx, "p1"); err != nil {
@@ -217,6 +217,26 @@ func TestStartIssueMovesToFirstStartedStateAndClaims(t *testing.T) {
 	input := mutation["input"].(map[string]any)
 	if mutation["id"] != "issue-9" || input["stateId"] != "progress" || input["assigneeId"] != "me" {
 		t.Fatalf("mutation variables %v", mutation)
+	}
+}
+
+func TestSetProjectStatusSendsTheStatusID(t *testing.T) {
+	fakeStore(t, &tokens{AccessToken: "a", ExpiresAt: time.Now().Add(time.Hour)})
+	var sent map[string]any
+	fakeLinear(t, func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		sent = body.Variables
+		reply(200, map[string]any{"data": map[string]any{"projectUpdate": map[string]any{"success": true}}})(w, r)
+	})
+	if err := (&linearClient{}).setProjectStatus(context.Background(), "p1", "planned"); err != nil {
+		t.Fatal(err)
+	}
+	input, _ := sent["input"].(map[string]any)
+	if sent["id"] != "p1" || input["statusId"] != "planned" || len(input) != 1 {
+		t.Fatalf("mutation variables %v", sent)
 	}
 }
 

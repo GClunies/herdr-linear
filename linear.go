@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,16 +19,20 @@ var graphqlURL = "https://api.linear.app/graphql" // a var so tests can point it
 // one is linearClient; demoSource (demo.go) is a fictional workspace for
 // screenshots and trying the plugin without an account.
 type source interface {
-	myIssues(ctx context.Context) ([]issue, error)
+	// myIssues, createdIssues and projects are the lists, each narrowed by f.
+	myIssues(ctx context.Context, f listFilter) ([]issue, error)
 	// createdIssues is the issues you created lately, newest first, in any
 	// state and anyone's: what you just filed, wherever it landed.
-	createdIssues(ctx context.Context) ([]issue, error)
-	projects(ctx context.Context) ([]project, error)
+	createdIssues(ctx context.Context, f listFilter) ([]issue, error)
+	projects(ctx context.Context, f listFilter) ([]project, error)
 	projectIssues(ctx context.Context, projectID string) ([]issue, error)
 	issueDetail(ctx context.Context, id string) (*issueDetail, error)
 	projectDetail(ctx context.Context, id string) (*projectDetail, error)
 	teamStates(ctx context.Context, teamID string) ([]workflowState, error)
 	setState(ctx context.Context, issueID, stateID string) error
+	// projectStatuses lists the workspace's project statuses, in no order.
+	projectStatuses(ctx context.Context) ([]projectStatus, error)
+	setProjectStatus(ctx context.Context, projectID, statusID string) error
 	// freshIssue re-reads one issue, for decisions that must not rest on what
 	// the popup loaded minutes ago.
 	freshIssue(ctx context.Context, id string) (issue, error)
@@ -168,6 +173,7 @@ type issue struct {
 }
 
 type projectStatus struct {
+	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Type  string `json:"type"` // backlog | planned | started | paused | completed | canceled
 	Color string `json:"color"`
@@ -220,19 +226,12 @@ func (f listFilter) issues(base map[string]any) map[string]any {
 	return narrowed
 }
 
-// projects is the ProjectFilter for the Projects tab: open projects, and
-// with a filter set, those in its teams or that you're a member of.
+// projects is the ProjectFilter for the Projects tab: open projects, in one
+// of f's teams at least.
 func (f listFilter) projects() map[string]any {
 	pf := map[string]any{"status": notDone}
-	var either []map[string]any
 	if len(f.Teams) > 0 {
-		either = append(either, map[string]any{"accessibleTeams": map[string]any{"some": map[string]any{"key": map[string]any{"in": f.Teams}}}})
-	}
-	if f.MemberProjects {
-		either = append(either, map[string]any{"members": map[string]any{"some": map[string]any{"isMe": map[string]any{"eq": true}}}})
-	}
-	if len(either) > 0 {
-		pf["or"] = either
+		pf["accessibleTeams"] = map[string]any{"some": map[string]any{"key": map[string]any{"in": f.Teams}}}
 	}
 	return pf
 }
@@ -296,7 +295,7 @@ func fetchAll[T, R any](ctx context.Context, c *linearClient, q string, vars map
 
 const pageFields = `pageInfo { hasNextPage endCursor }`
 
-func (c *linearClient) myIssues(ctx context.Context) ([]issue, error) {
+func (c *linearClient) myIssues(ctx context.Context, f listFilter) ([]issue, error) {
 	type reply struct {
 		Viewer struct {
 			AssignedIssues connection[issue] `json:"assignedIssues"`
@@ -304,7 +303,7 @@ func (c *linearClient) myIssues(ctx context.Context) ([]issue, error) {
 	}
 	q := `query($after: String, $filter: IssueFilter) { viewer { assignedIssues(first: 100, after: $after, orderBy: updatedAt, filter: $filter) {
   nodes { ...IssueFields } ` + pageFields + ` } } }` + issueFields
-	vars := map[string]any{"filter": c.cfg.Filter.issues(openIssues)}
+	vars := map[string]any{"filter": f.issues(openIssues)}
 	issues, err := fetchAll(ctx, c, q, vars, func(r *reply) *connection[issue] { return &r.Viewer.AssignedIssues })
 	sortIssues(issues)
 	return issues, err
@@ -314,7 +313,7 @@ func (c *linearClient) myIssues(ctx context.Context) ([]issue, error) {
 // for finding what you just filed, not your whole history.
 const recentCreated = 50
 
-func (c *linearClient) createdIssues(ctx context.Context) ([]issue, error) {
+func (c *linearClient) createdIssues(ctx context.Context, f listFilter) ([]issue, error) {
 	var res struct {
 		Viewer struct {
 			CreatedIssues struct {
@@ -323,7 +322,7 @@ func (c *linearClient) createdIssues(ctx context.Context) ([]issue, error) {
 		} `json:"viewer"`
 	}
 	q := `query($first: Int, $filter: IssueFilter) { viewer { createdIssues(first: $first, orderBy: createdAt, filter: $filter) { nodes { ...IssueFields } } } }` + issueFields
-	vars := map[string]any{"first": recentCreated, "filter": c.cfg.Filter.issues(nil)}
+	vars := map[string]any{"first": recentCreated, "filter": f.issues(nil)}
 	if err := c.query(ctx, q, vars, &res); err != nil {
 		return nil, err
 	}
@@ -344,31 +343,36 @@ func (c *linearClient) projectIssues(ctx context.Context, projectID string) ([]i
 	return issues, err
 }
 
-func (c *linearClient) projects(ctx context.Context) ([]project, error) {
+func (c *linearClient) projects(ctx context.Context, f listFilter) ([]project, error) {
 	type reply struct {
 		Projects connection[project] `json:"projects"`
 	}
 	q := `query($after: String, $filter: ProjectFilter) { projects(first: 100, after: $after, orderBy: updatedAt, filter: $filter) {
-  nodes { id name slugId url color progress targetDate status { name type color } lead { isMe } teams(first: 25) { nodes { id key } } }
+  nodes { id name slugId url color progress targetDate status { id name type color } lead { isMe } teams(first: 25) { nodes { id key } } }
   ` + pageFields + `
 } }`
-	vars := map[string]any{"filter": c.cfg.Filter.projects()}
+	vars := map[string]any{"filter": f.projects()}
 	ps, err := fetchAll(ctx, c, q, vars, func(r *reply) *connection[project] { return &r.Projects })
 	sortProjects(ps)
 	return ps, err
 }
 
-// sortProjects groups projects by status, as the list shows them: by how
-// far along the status is, a workspace's own statuses of one kind by name;
-// within a status, the ones you lead first, then the latest updated.
+// compareStatus orders project statuses as the Projects tab groups them: by
+// how far along the status is, a workspace's own statuses of one kind by name.
+func compareStatus(a, b projectStatus) int {
+	if c := cmp.Compare(projectRank(a.Type), projectRank(b.Type)); c != 0 {
+		return c
+	}
+	return strings.Compare(a.Name, b.Name)
+}
+
+// sortProjects groups projects by status, as the list shows them
+// (compareStatus); within a status, the ones you lead first, then the latest
+// updated.
 func sortProjects(ps []project) {
 	sort.SliceStable(ps, func(i, j int) bool {
-		a, b := ps[i].Status, ps[j].Status
-		if ra, rb := projectRank(a.Type), projectRank(b.Type); ra != rb {
-			return ra < rb
-		}
-		if a.Name != b.Name {
-			return a.Name < b.Name
+		if c := compareStatus(ps[i].Status, ps[j].Status); c != 0 {
+			return c < 0
 		}
 		li, lj := ps[i].Lead != nil && ps[i].Lead.IsMe, ps[j].Lead != nil && ps[j].Lead.IsMe
 		return li && !lj
@@ -525,6 +529,35 @@ func (c *linearClient) updateIssue(ctx context.Context, issueID string, input ma
 		return err
 	}
 	if !res.IssueUpdate.Success {
+		return errors.New("Linear refused the update")
+	}
+	return nil
+}
+
+func (c *linearClient) projectStatuses(ctx context.Context) ([]projectStatus, error) {
+	var res struct {
+		ProjectStatuses struct {
+			Nodes []projectStatus `json:"nodes"`
+		} `json:"projectStatuses"`
+	}
+	q := `query { projectStatuses(first: 250) { nodes { id name type color } } }`
+	if err := c.query(ctx, q, nil, &res); err != nil {
+		return nil, err
+	}
+	return res.ProjectStatuses.Nodes, nil
+}
+
+func (c *linearClient) setProjectStatus(ctx context.Context, projectID, statusID string) error {
+	var res struct {
+		ProjectUpdate struct {
+			Success bool `json:"success"`
+		} `json:"projectUpdate"`
+	}
+	q := `mutation($id: String!, $input: ProjectUpdateInput!) { projectUpdate(id: $id, input: $input) { success } }`
+	if err := c.query(ctx, q, map[string]any{"id": projectID, "input": map[string]any{"statusId": statusID}}, &res); err != nil {
+		return err
+	}
+	if !res.ProjectUpdate.Success {
 		return errors.New("Linear refused the update")
 	}
 	return nil

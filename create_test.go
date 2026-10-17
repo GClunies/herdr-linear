@@ -51,8 +51,7 @@ func TestQuickAddFromTheList(t *testing.T) {
 // A new issue in a team the filter leaves out stays out of My issues and
 // Recent, as Linear's next answer would.
 func TestQuickAddKeepsToTheFilter(t *testing.T) {
-	m := demoModel(t)
-	m.cfg.Filter = listFilter{Teams: []string{"WEB"}}
+	m := press(press(press(press(press(demoModel(t), "ctrl+f"), "down"), "down"), " "), "enter") // Mobile only
 	if !m.loaded[tabRecent] {
 		t.Fatal("Recent didn't load")
 	}
@@ -75,7 +74,7 @@ func TestQuickAddNeedsATitle(t *testing.T) {
 
 func TestQuickAddFromAProjectFillsItIn(t *testing.T) {
 	m := press(press(demoModel(t), "tab"), "enter") // Offline sync's screen
-	m = press(m, "c")
+	m = press(m, "n")
 	if m.screen != screenCreate || m.form.projectID != "a1f3" || m.form.teamID != demoTeamID {
 		t.Fatalf("screen %v project %q team %q", m.screen, m.form.projectID, m.form.teamID)
 	}

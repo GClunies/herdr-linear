@@ -55,8 +55,9 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.move(delta)
 		case screenIssue, screenProject:
 			m.scrollBody(delta)
-		case screenStatus:
-			if n := len(m.states[m.cur.Team.ID]); n > 0 {
+		case screenStatus, screenProjectStatus:
+			choices, _ := m.statusChoices()
+			if n := len(choices); n > 0 {
 				m.stateCursor = min(max(0, m.stateCursor+delta), n-1)
 			}
 		}
@@ -123,16 +124,17 @@ func (m model) fileRowAt(y int) (int, bool) {
 
 // stateAt is the status picker entry on screen line y, if any.
 func (m model) stateAt(y int) (int, bool) {
-	if m.screen != screenStatus {
+	if m.screen != screenStatus && m.screen != screenProjectStatus {
 		return 0, false
 	}
-	header := m.issueHeader()
+	header := m.detailHeader()
 	room := m.issueBodyRoom(header)
 	start := m.pickerStart(room)
 	// tabs, blank, header, then the "Move to" heading.
 	top := 2 + strings.Count(header, "\n") + 1
 	i := start + y - top
-	if y < top || i >= len(m.states[m.cur.Team.ID]) || i-start >= max(1, room-1) {
+	choices, _ := m.statusChoices()
+	if y < top || i >= len(choices) || i-start >= max(1, room-1) {
 		return 0, false
 	}
 	return i, true

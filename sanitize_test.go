@@ -62,7 +62,7 @@ func TestHostileLinearDataRendersInert(t *testing.T) {
 		}}}})
 	})
 	c := &linearClient{cfg: config{}}
-	issues, err := c.myIssues(context.Background())
+	issues, err := c.myIssues(context.Background(), listFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}

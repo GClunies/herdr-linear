@@ -228,11 +228,19 @@ func TestLogoutOneWorkspace(t *testing.T) {
 	items := fakeStores(t, map[string]*tokens{account(acme.ID): live(), account(globex.ID): live()})
 	withIndex(t, workspaceIndex{Workspaces: []workspace{acme, globex}})
 	fakeRevoke(t, 200)
+	for id, team := range map[string]string{acme.ID: "ENG", globex.ID: "OPS"} {
+		if err := saveFilter(id, listFilter{Teams: []string{team}}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if done, err := logout(context.Background(), config{}, "globex", false); err != nil || len(done) != 1 {
 		t.Fatalf("%v %v", done, err)
 	}
 	if items[account(acme.ID)] == nil || items[account(globex.ID)] != nil {
 		t.Fatalf("stored %v", items)
+	}
+	if g, a := savedFilter(globex.ID), savedFilter(acme.ID); len(g.Teams) != 0 || len(a.Teams) != 1 {
+		t.Fatalf("saved filters: Globex %v, Acme %v", g, a)
 	}
 	if _, err := logout(context.Background(), config{}, "initech", false); err == nil {
 		t.Fatal("an unknown workspace")
@@ -368,7 +376,7 @@ func runCmds(cmd tea.Cmd) {
 func TestAClientUsesItsOwnWorkspacesTokens(t *testing.T) {
 	fakeStores(t, map[string]*tokens{account(globex.ID): live()})
 	c := &linearClient{ws: acme}
-	if _, err := c.myIssues(context.Background()); !errors.Is(err, errSignedOut) {
+	if _, err := c.myIssues(context.Background(), listFilter{}); !errors.Is(err, errSignedOut) {
 		t.Fatalf("Acme's client got past with Globex's tokens: %v", err)
 	}
 }

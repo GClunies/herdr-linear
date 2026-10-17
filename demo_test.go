@@ -106,7 +106,7 @@ func TestDemoStatusChangeSticks(t *testing.T) {
 	if m.cur.State.Name != "Done" || m.flash != "Moved to Done" {
 		t.Fatalf("state %s flash %q", m.cur.State.Name, m.flash)
 	}
-	fresh, _ := m.client.myIssues(context.Background())
+	fresh, _ := m.client.myIssues(context.Background(), listFilter{})
 	for _, is := range fresh {
 		if is.Identifier == "HAL-212" {
 			t.Fatal("a Done issue should leave My issues on the next load")

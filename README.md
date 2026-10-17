@@ -262,6 +262,10 @@ Pick one with enter (or click it). The change is saved in Linear immediately
 and the list updates without reloading. If Linear refuses, the old status stays
 and the error is shown.
 
+On a project's screen, `c` does the same with the workspace's project
+statuses, in the order the Projects tab groups them. A project moved to a
+completed or canceled status leaves the Projects tab.
+
 ### Projects
 
 Tab (or →) switches to projects: active projects, grouped by status like your
@@ -281,7 +285,8 @@ branch, and its content rendered as Markdown.
 | `i` or enter | the project's open issues, everyone's, not just yours  |
 | `w`          | a worktree for the whole project                       |
 | `s`          | start the project: its worktree, and a first prompt    |
-| `c`          | a new issue in this project (see [New issues](#new-issues)) |
+| `c`          | change the project's status (see [Changing status](#changing-status)) |
+| `n`          | a new issue in this project (see [New issues](#new-issues)) |
 | `o`          | open in Linear                                         |
 | esc, ←       | back                                                   |
 
@@ -296,9 +301,34 @@ in any status and whoever they're assigned to now, so what you just filed is
 on top even when it isn't yours or went to Triage. Issues assigned to someone
 else show their name.
 
+### Teams
+
+ctrl+f in the list chooses which of the workspace's teams the lists show: My
+issues and Recent list only those teams' issues, and Projects the projects in
+at least one of them. Linear does the narrowing, so nothing else is fetched.
+With no team checked, every team shows. The teams checked are at the top
+right, `PD, DATA` say, beside the workspace's name.
+
+| key      | does                                                         |
+|----------|--------------------------------------------------------------|
+| typing   | find a team                                                  |
+| ↑ ↓      | move                                                         |
+| space    | check or uncheck the team; on *All teams*, every team shown, or none when they all are |
+| enter    | show those teams until the popup closes                      |
+| ctrl+s   | show those teams, and keep them as this workspace's default  |
+| esc      | cancel                                                       |
+
+*All teams* shows `[x]` when every team shown is checked and `[-]` when some
+are. With a search typed, it's the teams found.
+
+Every popup opens on its workspace's default: the teams kept with ctrl+s, or
+every team. Each workspace has its own, kept on this machine (see
+[What's remembered besides](#privacy-and-security)). A project's own issues,
+and an issue number typed in the filter, still show every team.
+
 ### New issues
 
-ctrl+c in the list (or `c` on a project's screen, as in Linear) opens a form
+ctrl+c in the list (or `n` on a project's screen) opens a form
 for a new issue. Letters type into the list's filter, hence the ctrl there. Type a title and press enter, and it's created with the defaults:
 assigned to you, in your team's default status (Todo, usually), in the project
 you were on if you were on one. The status the form shows is the one it gets:
@@ -354,6 +384,7 @@ In the list:
 | ctrl+c               | a new issue, in the selected or open project if any (see [New issues](#new-issues)) |
 | ctrl+o               | open in Linear                                         |
 | ctrl+r               | refresh                                                |
+| ctrl+f               | choose the teams the lists show (see [Teams](#teams))  |
 | ctrl+t               | switch Linear workspace (see [More than one workspace](#more-than-one-workspace)) |
 | tab, ← →             | switch between My issues, Projects and Recent          |
 | esc                  | clear the filter, then go back, then close             |
@@ -525,7 +556,6 @@ herdr plugin config-dir herdr-linear
 ```json
 {
   "repos": { "ENG": "~/code/app", "WEB": "~/code/website" },
-  "filter": { "teams": ["ENG", "WEB"], "member_projects": true },
   "base": "origin/main",
   "project_start_prompt": "Work on the Linear project at {url}",
   "agent_wait_seconds": 90,
@@ -536,7 +566,6 @@ herdr plugin config-dir herdr-linear
 | key                  | default                    | what it does                                                                                     |
 |----------------------|----------------------------|--------------------------------------------------------------------------------------------------|
 | `repos`              | none                       | Linear team key → checkout. Used for that team's worktrees wherever you open the picker. With more than one workspace, `"acme/ENG"` is team ENG in workspace `acme` only, and wins over a plain `"ENG"`. |
-| `filter`             | every team                 | Narrows My issues, Projects and Recent. `teams`: only these team keys' issues and projects. `member_projects`: `true` lists the projects you're a member of as well, in any team. A project's own issues, and an issue number typed in the filter, still show every team. The new-issue form offers the projects the Projects tab lists. |
 | `base`               | the remote's default branch | What new branches start from. Fetched first when it's a remote branch.                          |
 | `start_prompt`       | `/ticket` where there's one, else a plain prompt | What **start** types into the new worktree's agent. `{identifier}`, `{title}`, `{url}` are filled in. See [Start](#start), and the note on `{title}` there. |
 | `project_start_prompt` | `Work on the Linear project at {url}` | What starting a project types into its new worktree's agent. `{name}`, `{url}` are filled in. |
@@ -706,7 +735,12 @@ identifiers, statuses, assignees' names and branch names), so the next popup
 has something to show while Linear answers. It's readable only by you
 (`0600`), never leaves the machine, and a workspace's lists are deleted when
 you sign out of it. Descriptions and comments aren't kept. The demo keeps
-nothing.
+nothing. Only the lists for a workspace's default teams are kept: a choice
+made with enter in [Teams](#teams) doesn't replace them.
+
+`filters.json` has each workspace's default teams (see [Teams](#teams)), by
+workspace ID: team keys, nothing else. It's `0600`, and a workspace's goes
+when you sign out of it.
 
 What the keychain and keyring do and don't protect: on macOS the item is created by
 the `security` tool, so it's the `security` tool the keychain trusts to read

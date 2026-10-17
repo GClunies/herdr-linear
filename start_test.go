@@ -283,7 +283,7 @@ func TestProjectStartKeys(t *testing.T) {
 	m := newModel(context.Background(), config{}, "")
 	m.width, m.height = 100, 30
 	m.client = newDemoSource()
-	ps, _ := m.client.projects(context.Background())
+	ps, _ := m.client.projects(context.Background(), listFilter{})
 	m.tab, m.projects, m.mode, m.loaded = tabProjects, ps, modeList, map[tab]bool{tabProjects: true}
 	m.clampCursor()
 	first := m.selected().project.Name

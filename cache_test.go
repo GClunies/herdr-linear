@@ -80,20 +80,30 @@ func TestListsAreKeptByWorkspace(t *testing.T) {
 }
 
 // Lists kept under one filter aren't shown under another: they'd list what
-// the filter leaves out.
+// the filter leaves out. Only the default filter's are kept: the next popup
+// opens on it, and an unsaved filter's lists would take their place.
 func TestListsAreKeptByFilter(t *testing.T) {
 	t.Setenv("HERDR_PLUGIN_STATE_DIR", t.TempDir())
-	acme := workspace{ID: "ws-acme"}
+	acme, web := workspace{ID: "ws-acme"}, listFilter{Teams: []string{"WEB"}}
 	saveListCache(acme.ID, listFilter{}, tabMine, withIDs(twoGroups()).issues, nil)
-
-	m := newModel(context.Background(), config{Filter: listFilter{Teams: []string{"WEB"}}}, "/repo")
-	m.width, m.height, m.cache = 100, 20, true
-	if m, _ = m.useWorkspace(acme, false); len(m.rows()) != 0 {
-		t.Fatalf("opened on the unfiltered lists: %+v", m.rows())
+	if err := saveFilter(acme.ID, web); err != nil {
+		t.Fatal(err)
 	}
-	saveListCache(acme.ID, listFilter{Teams: []string{"WEB"}}, tabRecent, nil, nil)
-	if c := readListCache(acme.ID, listFilter{Teams: []string{"WEB"}}); c.Mine != nil || c.Recent == nil {
+
+	m := cachedModel(t, acme)
+	if len(m.rows()) != 0 || !m.teamFilter.equal(web) {
+		t.Fatalf("filter %v, opened on the unfiltered lists: %+v", m.teamFilter, m.rows())
+	}
+	saveListCache(acme.ID, web, tabRecent, nil, nil)
+	if c := readListCache(acme.ID, web); c.Mine != nil || c.Recent == nil {
 		t.Fatalf("kept %+v", c)
+	}
+	m.teamFilter = listFilter{Teams: []string{"OPS"}} // applied with enter, not saved
+	if cmd := m.keep(tabMine, withIDs(twoGroups()).issues, nil, nil); cmd != nil {
+		cmd()
+	}
+	if c := readListCache(acme.ID, web); c.Recent == nil {
+		t.Fatalf("an unsaved filter's list replaced the default's: %+v", c)
 	}
 }
 

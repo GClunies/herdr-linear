@@ -534,6 +534,7 @@ func logoutLocked(ctx context.Context, cfg config, w workspace, local bool) erro
 			return nil
 		}
 		dropListCache(w.ID) // its issues' titles go with it
+		_ = saveFilter(w.ID, listFilter{})
 		return updateIndexLocked(func(ix *workspaceIndex) { ix.remove(w.ID) })
 	}
 	t, err := readStore(acct)

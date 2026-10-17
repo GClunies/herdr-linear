@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,9 +16,11 @@ const (
 	screenList screen = iota
 	screenIssue
 	screenProject
-	screenStatus  // the status picker, over the issue screen
-	screenCreate  // the new issue form (create.go)
-	screenCreated // what was just created, and what next
+	screenStatus        // the status picker, over the issue screen
+	screenCreate        // the new issue form (create.go)
+	screenCreated       // what was just created, and what next
+	screenFilter        // the team filter's editor, over the list (filter.go)
+	screenProjectStatus // the status picker, over the project screen
 )
 
 // Like the list loads, these carry the gen they were asked for under.
@@ -43,6 +46,16 @@ type stateSetMsg struct {
 	issueID string
 	state   workflowState
 	err     error
+}
+type projectStatusesMsg struct {
+	statuses []projectStatus
+	err      error
+	gen      int
+}
+type projectStatusSetMsg struct {
+	projectID string
+	status    projectStatus
+	err       error
 }
 
 // ── opening ───────────────────────────────────────────────────────────────────
@@ -78,10 +91,41 @@ func (m model) openStatusPicker() (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m model) openProjectStatusPicker() (tea.Model, tea.Cmd) {
+	m.screen, m.err, m.flash = screenProjectStatus, "", ""
+	if len(m.projStatuses) > 0 {
+		m.placeStateCursor()
+		return m, nil
+	}
+	client, ctx, gen := m.client, m.ctx, m.gen
+	return m, func() tea.Msg {
+		s, err := client.projectStatuses(ctx)
+		return projectStatusesMsg{s, err, gen}
+	}
+}
+
+// statusChoices is what the open status picker offers, the issue's team's
+// workflow states or the workspace's project statuses, and the current one's
+// id.
+func (m model) statusChoices() ([]choice, string) {
+	var cs []choice
+	if m.screen == screenProjectStatus {
+		for _, s := range m.projStatuses {
+			cs = append(cs, choice{s.ID, s.Name, colored(projectIcon(s.Type), s.Color)})
+		}
+		return cs, m.curProject.Status.ID
+	}
+	for _, s := range m.states[m.cur.Team.ID] {
+		cs = append(cs, choice{s.ID, s.Name, colored(stateIcon(s), s.Color)})
+	}
+	return cs, m.cur.State.ID
+}
+
 func (m *model) placeStateCursor() {
 	m.stateCursor = 0
-	for i, s := range m.states[m.cur.Team.ID] {
-		if s.ID == m.cur.State.ID {
+	cs, current := m.statusChoices()
+	for i, c := range cs {
+		if c.id == current {
 			m.stateCursor = i
 		}
 	}
@@ -128,6 +172,31 @@ func (m model) updateDetail(msg tea.Msg) (model, bool) {
 		m.applyState(msg.issueID, msg.state)
 		m.flash = "Moved to " + msg.state.Name
 		return m, true
+	case projectStatusesMsg:
+		if msg.gen != m.gen {
+			return m, true
+		}
+		if m.handleLoadErr(msg.err) {
+			if m.screen == screenProjectStatus {
+				m.screen = screenProject
+			}
+			return m, true
+		}
+		// The picker lists them as the Projects tab groups them.
+		slices.SortStableFunc(msg.statuses, compareStatus)
+		m.projStatuses = msg.statuses
+		if m.screen == screenProjectStatus {
+			m.placeStateCursor()
+		}
+		return m, true
+	case projectStatusSetMsg:
+		m.mode = modeList
+		if m.handleLoadErr(msg.err) {
+			return m, true
+		}
+		m.applyProjectStatus(msg.projectID, msg.status)
+		m.flash = "Moved to " + msg.status.Name
+		return m, true
 	}
 	return m, false
 }
@@ -166,33 +235,57 @@ func (m *model) applyState(issueID string, s workflowState) {
 	m.clampCursor()
 }
 
+// applyProjectStatus does for a project what applyState does for an issue.
+// The Projects tab lists open projects only, so a project moved to a
+// completed or canceled status leaves it; its screen keeps showing it.
+func (m *model) applyProjectStatus(projectID string, s projectStatus) {
+	out := m.projects[:0]
+	for _, p := range m.projects {
+		if p.ID == projectID {
+			if !isOpenState(s.Type) {
+				continue
+			}
+			p.Status = s
+		}
+		out = append(out, p)
+	}
+	sortProjects(out)
+	m.projects = out
+	if m.curProject != nil && m.curProject.ID == projectID {
+		m.curProject.Status = s
+	}
+	m.clampCursor()
+}
+
 // ── keys ──────────────────────────────────────────────────────────────────────
 
 func (m model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.screen {
-	case screenStatus:
-		states := m.states[m.cur.Team.ID]
+	case screenStatus, screenProjectStatus:
+		back := screenIssue
+		if m.screen == screenProjectStatus {
+			back = screenProject
+		}
+		choices, current := m.statusChoices()
 		switch k.String() {
 		case "esc", "c":
-			m.screen = screenIssue
+			m.screen = back
 		case "up", "k", "ctrl+p":
 			m.stateCursor = max(0, m.stateCursor-1)
 		case "down", "j", "ctrl+n":
-			if len(states) > 0 { // still loading: nothing to move over
-				m.stateCursor = min(len(states)-1, m.stateCursor+1)
+			if len(choices) > 0 { // still loading: nothing to move over
+				m.stateCursor = min(len(choices)-1, m.stateCursor+1)
 			}
 		case "enter":
-			if m.stateCursor >= 0 && m.stateCursor < len(states) {
-				s := states[m.stateCursor]
-				m.screen = screenIssue
-				if s.ID == m.cur.State.ID {
+			if m.stateCursor >= 0 && m.stateCursor < len(choices) {
+				m.screen = back
+				switch {
+				case choices[m.stateCursor].id == current:
 					return m, nil
+				case back == screenProject:
+					return m.moveProject(m.projStatuses[m.stateCursor])
 				}
-				m.mode, m.status = modeBusy, "Moving "+m.cur.Identifier+" to "+s.Name+"…"
-				id, client, ctx := m.cur.ID, m.client, m.ctx
-				return m, tea.Batch(m.spin.Tick, func() tea.Msg {
-					return stateSetMsg{id, s, client.setState(ctx, id, s.ID)}
-				})
+				return m.moveIssue(m.states[m.cur.Team.ID][m.stateCursor])
 			}
 		}
 		return m, nil
@@ -253,6 +346,8 @@ func (m model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "s":
 			return m.runProjectStart(p)
 		case "c":
+			return m.openProjectStatusPicker()
+		case "n":
 			return m.openCreate(&p, nil)
 		case "i", "enter":
 			m.screen = screenList
@@ -264,6 +359,24 @@ func (m model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// moveIssue sets the issue on screen to s in Linear.
+func (m model) moveIssue(s workflowState) (tea.Model, tea.Cmd) {
+	m.mode, m.status = modeBusy, "Moving "+m.cur.Identifier+" to "+s.Name+"…"
+	id, client, ctx := m.cur.ID, m.client, m.ctx
+	return m, tea.Batch(m.spin.Tick, func() tea.Msg {
+		return stateSetMsg{id, s, client.setState(ctx, id, s.ID)}
+	})
+}
+
+// moveProject sets the project on screen to s in Linear.
+func (m model) moveProject(s projectStatus) (tea.Model, tea.Cmd) {
+	m.mode, m.status = modeBusy, "Moving "+m.curProject.Name+" to "+s.Name+"…"
+	id, client, ctx := m.curProject.ID, m.client, m.ctx
+	return m, tea.Batch(m.spin.Tick, func() tea.Msg {
+		return projectStatusSetMsg{id, s, client.setProjectStatus(ctx, id, s.ID)}
+	})
 }
 
 // openURL opens Linear in the browser, in the background: opening can take
@@ -357,10 +470,16 @@ func (m model) bodyLines() []string {
 }
 
 func (m model) bodyRoom() int {
-	if m.screen == screenProject {
-		return m.issueBodyRoom(m.projectHeader())
+	return m.issueBodyRoom(m.detailHeader())
+}
+
+// detailHeader is the header of the issue or project screen on show, with
+// or without its status picker open.
+func (m model) detailHeader() string {
+	if m.screen == screenProject || m.screen == screenProjectStatus {
+		return m.projectHeader()
 	}
-	return m.issueBodyRoom(m.issueHeader())
+	return m.issueHeader()
 }
 
 func (m *model) scrollBody(delta int) {
@@ -434,17 +553,17 @@ func (m model) pickerStart(room int) int {
 }
 
 func (m model) viewStatusPicker(room int) string {
-	states := m.states[m.cur.Team.ID]
-	if len(states) == 0 {
+	choices, current := m.statusChoices()
+	if len(choices) == 0 {
 		return " " + m.spin.View() + styleDim.Render(" loading statuses…") + "\n"
 	}
 	var b strings.Builder
 	b.WriteString(styleHeader.Render(" Move to") + "\n")
 	start := m.pickerStart(room)
-	for i := start; i < len(states) && i-start < max(1, room-1); i++ {
-		s := states[i]
-		line := "   " + colored(stateIcon(s), s.Color) + " " + s.Name
-		if s.ID == m.cur.State.ID {
+	for i := start; i < len(choices) && i-start < max(1, room-1); i++ {
+		c := choices[i]
+		line := "   " + c.glyph + " " + c.label
+		if c.id == current {
 			line += styleDim.Render("  current")
 		}
 		if i == m.stateCursor {
@@ -457,7 +576,10 @@ func (m model) viewStatusPicker(room int) string {
 
 func (m model) viewProject() string {
 	header := m.projectHeader()
-	if m.projDetail == nil {
+	switch {
+	case m.screen == screenProjectStatus:
+		return header + m.viewStatusPicker(m.issueBodyRoom(header))
+	case m.projDetail == nil:
 		return header + " " + m.spin.View() + styleDim.Render(" loading…") + "\n"
 	}
 	return header + window(m.bodyLines(), m.scroll, m.issueBodyRoom(header))
@@ -491,10 +613,12 @@ func (m model) detailFooter() []hint {
 	switch m.screen {
 	case screenCreate, screenCreated:
 		return m.createFooter()
-	case screenStatus:
+	case screenStatus, screenProjectStatus:
 		return []hint{{"↑↓ choose", "", hintView}, {"enter move", "enter", hintAct}, {"esc cancel", "esc", hintQuiet}}
+	case screenFilter:
+		return []hint{{"space check", " ", hintView}, {"enter apply", "enter", hintGo}, {"^s save as default", "ctrl+s", hintAct}, {"esc cancel", "esc", hintQuiet}}
 	case screenProject:
-		return []hint{{"w worktree", "w", hintAct}, {"s start", "s", hintAct}, {"c new issue", "c", hintAct}, {"i issues", "i", hintView}, {"o open in Linear", "o", hintView}, {"esc back", "esc", hintQuiet}}
+		return []hint{{"w worktree", "w", hintAct}, {"s start", "s", hintAct}, {"c status", "c", hintAct}, {"n new issue", "n", hintAct}, {"i issues", "i", hintView}, {"o open in Linear", "o", hintView}, {"esc back", "esc", hintQuiet}}
 	default:
 		if m.direct {
 			return []hint{{"w worktree", "w", hintAct}, {"s start", "s", hintAct}, {"c status", "c", hintAct}, {"o open in Linear", "o", hintView}, {"← lists", "left", hintView}, {m.escLabel(), "esc", hintQuiet}}

@@ -39,7 +39,7 @@ func TestListsFollowTheCursorToTheEnd(t *testing.T) {
 		}
 	}
 	fakeLinear(t, page(0, true), page(100, true), page(200, false))
-	is, err := (&linearClient{}).myIssues(context.Background())
+	is, err := (&linearClient{}).myIssues(context.Background(), listFilter{})
 	if err != nil || len(is) != 300 {
 		t.Fatalf("%d issues, %v", len(is), err)
 	}
@@ -76,7 +76,7 @@ func TestPagingThatDoesntAdvanceStops(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fakeLinear(t, pages...)
 			done := make(chan error, 1)
-			go func() { _, err := (&linearClient{}).myIssues(context.Background()); done <- err }()
+			go func() { _, err := (&linearClient{}).myIssues(context.Background(), listFilter{}); done <- err }()
 			select {
 			case err := <-done:
 				if !errors.Is(err, errIncomplete) {
@@ -99,7 +99,7 @@ func TestHugeListsStopVisiblyNotSilently(t *testing.T) {
 		})
 	}
 	fakeLinear(t, pages...)
-	is, err := (&linearClient{}).myIssues(context.Background())
+	is, err := (&linearClient{}).myIssues(context.Background(), listFilter{})
 	if !errors.Is(err, errTruncated) || len(is) != maxItems {
 		t.Fatalf("%d issues, %v: want %d and errTruncated", len(is), err, maxItems)
 	}

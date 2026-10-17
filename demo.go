@@ -40,6 +40,19 @@ var (
 	demoTeamID = "t-hal"
 )
 
+// demoMobileID is a second team, with nothing in it yet, for the team filter.
+const demoMobileID = "t-mob"
+
+func demoTeams() []teamInfo {
+	todo := &struct {
+		ID string `json:"id"`
+	}{"s-todo"}
+	return []teamInfo{
+		{ID: demoTeamID, Key: "HAL", Name: "Halcyon", DefaultState: todo},
+		{ID: demoMobileID, Key: "MOB", Name: "Mobile", DefaultState: todo},
+	}
+}
+
 func demoStates() []workflowState {
 	return []workflowState{
 		{ID: "s-triage", Name: "Triage", Type: "triage", Color: "#fc7840", Position: 0},
@@ -52,9 +65,29 @@ func demoStates() []workflowState {
 	}
 }
 
+func demoProjectStatuses() []projectStatus {
+	return []projectStatus{
+		{ID: "ps-backlog", Name: "Backlog", Type: "backlog", Color: "#bec2c8"},
+		{ID: "ps-planned", Name: "Planned", Type: "planned", Color: "#e2e2e2"},
+		{ID: "ps-progress", Name: "In Progress", Type: "started", Color: "#f2c94c"},
+		{ID: "ps-paused", Name: "Paused", Type: "paused", Color: "#95a2b3"},
+		{ID: "ps-completed", Name: "Completed", Type: "completed", Color: "#5e6ad2"},
+		{ID: "ps-canceled", Name: "Canceled", Type: "canceled", Color: "#95a2b3"},
+	}
+}
+
+func demoProjectStatus(id string) (projectStatus, bool) {
+	for _, s := range demoProjectStatuses() {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return projectStatus{}, false
+}
+
 func newDemoSource() *demoSource {
 	d := &demoSource{
-		states:      map[string][]workflowState{demoTeamID: demoStates()},
+		states:      map[string][]workflowState{demoTeamID: demoStates(), demoMobileID: demoStates()},
 		details:     map[string]*issueDetail{},
 		projDetails: map[string]*projectDetail{},
 		trees:       map[string]bool{},
@@ -68,20 +101,24 @@ func newDemoSource() *demoSource {
 		panic("demo: no state " + id)
 	}
 
-	proj := func(id, name, statusName, statusType, color string, progress float64, target string, lead *person) {
+	proj := func(id, name, statusID string, progress float64, target string, lead *person) {
+		status, ok := demoProjectStatus(statusID)
+		if !ok {
+			panic("demo: no project status " + statusID)
+		}
 		p := project{
-			ID: id, Name: name, SlugID: id, Color: color, Progress: progress, TargetDate: target, Lead: lead,
+			ID: id, Name: name, SlugID: id, Color: status.Color, Progress: progress, TargetDate: target, Lead: lead,
 			URL:    "https://linear.app/halcyon/project/" + slugify(name) + "-" + id,
-			Status: projectStatus{Name: statusName, Type: statusType, Color: color},
+			Status: status,
 		}
 		p.Teams.Nodes = []teamKey{{ID: demoTeamID, Key: "HAL"}}
 		d.projs = append(d.projs, p)
 	}
-	proj("a1f3", "Offline sync", "In Progress", "started", "#f2c94c", 0.64, "2026-10-15", demoMe)
-	proj("b27c", "Search 2.0", "In Progress", "started", "#f2c94c", 0.38, "2026-11-01", demoPriya)
-	proj("c9d0", "Export everything", "Planned", "planned", "#e2e2e2", 0.1, "2026-12-01", demoMe)
-	proj("d4e8", "Platform hardening", "Paused", "paused", "#95a2b3", 0.22, "", demoTomas)
-	proj("e5a2", "Home screen widgets", "Backlog", "backlog", "#bec2c8", 0, "", demoAda)
+	proj("a1f3", "Offline sync", "ps-progress", 0.64, "2026-10-15", demoMe)
+	proj("b27c", "Search 2.0", "ps-progress", 0.38, "2026-11-01", demoPriya)
+	proj("c9d0", "Export everything", "ps-planned", 0.1, "2026-12-01", demoMe)
+	proj("d4e8", "Platform hardening", "ps-paused", 0.22, "", demoTomas)
+	proj("e5a2", "Home screen widgets", "ps-backlog", 0, "", demoAda)
 
 	ref := func(id string) *projectRef {
 		for _, p := range d.projs {
@@ -179,12 +216,12 @@ func slugify(s string) string {
 
 func isOpenState(t string) bool { return t != "completed" && t != "canceled" }
 
-func (d *demoSource) myIssues(context.Context) ([]issue, error) {
+func (d *demoSource) myIssues(_ context.Context, f listFilter) ([]issue, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var out []issue
 	for _, is := range d.issues {
-		if is.Assignee != nil && is.Assignee.IsMe && isOpenState(is.State.Type) {
+		if is.Assignee != nil && is.Assignee.IsMe && isOpenState(is.State.Type) && f.hasTeam(is.Team.Key) {
 			out = append(out, is)
 		}
 	}
@@ -192,13 +229,13 @@ func (d *demoSource) myIssues(context.Context) ([]issue, error) {
 	return out, nil
 }
 
-func (d *demoSource) createdIssues(context.Context) ([]issue, error) {
+func (d *demoSource) createdIssues(_ context.Context, f listFilter) ([]issue, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var out []issue
 	for _, id := range d.created {
 		for _, is := range d.issues {
-			if is.ID == id {
+			if is.ID == id && f.hasTeam(is.Team.Key) {
 				out = append(out, is)
 			}
 		}
@@ -206,10 +243,22 @@ func (d *demoSource) createdIssues(context.Context) ([]issue, error) {
 	return out, nil
 }
 
-func (d *demoSource) projects(context.Context) ([]project, error) {
+// projects lists the open ones in one of f's teams at least, as Linear does.
+func (d *demoSource) projects(_ context.Context, f listFilter) ([]project, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	ps := append([]project(nil), d.projs...)
+	var ps []project
+	for _, p := range d.projs {
+		if !isOpenState(p.Status.Type) {
+			continue
+		}
+		for _, t := range p.Teams.Nodes {
+			if f.hasTeam(t.Key) {
+				ps = append(ps, p)
+				break
+			}
+		}
+	}
 	sortProjects(ps)
 	return ps, nil
 }
@@ -282,6 +331,26 @@ func (d *demoSource) setStateLocked(issueID, stateID string) error {
 	return errors.New("no such issue")
 }
 
+func (d *demoSource) projectStatuses(context.Context) ([]projectStatus, error) {
+	return demoProjectStatuses(), nil
+}
+
+func (d *demoSource) setProjectStatus(_ context.Context, projectID, statusID string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	status, ok := demoProjectStatus(statusID)
+	if !ok {
+		return errors.New("no such status")
+	}
+	for i := range d.projs {
+		if d.projs[i].ID == projectID {
+			d.projs[i].Status = status
+			return nil
+		}
+	}
+	return errors.New("no such project")
+}
+
 func (d *demoSource) freshIssue(_ context.Context, id string) (issue, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -330,11 +399,7 @@ func (d *demoSource) startLocked(is issue) error {
 }
 
 func (d *demoSource) teams(context.Context) ([]teamInfo, error) {
-	t := teamInfo{ID: demoTeamID, Key: "HAL", Name: "Halcyon"}
-	t.DefaultState = &struct {
-		ID string `json:"id"`
-	}{"s-todo"}
-	return []teamInfo{t}, nil
+	return demoTeams(), nil
 }
 
 // uploadFile pretends: a made-up URL, nothing sent.
@@ -346,10 +411,16 @@ func (d *demoSource) uploadFile(_ context.Context, path string) (string, error) 
 func (d *demoSource) createIssue(_ context.Context, n newIssue) (issue, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	var tm team
+	for _, t := range demoTeams() {
+		if t.ID == n.TeamID {
+			tm = team{ID: t.ID, Key: t.Key}
+		}
+	}
 	num := 0
 	for _, is := range d.issues {
 		var k int
-		if _, err := fmt.Sscanf(is.Identifier, "HAL-%d", &k); err == nil && k > num {
+		if _, err := fmt.Sscanf(is.Identifier, tm.Key+"-%d", &k); err == nil && k > num {
 			num = k
 		}
 	}
@@ -358,13 +429,14 @@ func (d *demoSource) createIssue(_ context.Context, n newIssue) (issue, error) {
 	if stateID == "" {
 		stateID = "s-todo"
 	}
+	id := fmt.Sprintf("%s-%d", tm.Key, num)
 	is := issue{
-		ID: fmt.Sprintf("i-%d", num), Identifier: fmt.Sprintf("HAL-%d", num), Title: n.Title, Priority: n.Priority,
-		Team:       team{ID: demoTeamID, Key: "HAL"},
-		BranchName: fmt.Sprintf("sam/hal-%d-%s", num, slugify(n.Title)),
-		URL:        fmt.Sprintf("https://linear.app/halcyon/issue/HAL-%d", num),
+		ID: "i-" + strings.ToLower(id), Identifier: id, Title: n.Title, Priority: n.Priority,
+		Team:       tm,
+		BranchName: fmt.Sprintf("sam/%s-%s", strings.ToLower(id), slugify(n.Title)),
+		URL:        "https://linear.app/halcyon/issue/" + id,
 	}
-	for _, s := range d.states[demoTeamID] {
+	for _, s := range d.states[tm.ID] {
 		if s.ID == stateID {
 			is.State = s
 		}
