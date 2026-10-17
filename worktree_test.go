@@ -25,11 +25,11 @@ func TestIssueTargetLabelNamesProjectOnce(t *testing.T) {
 	is := mkIssue("PD-501", "started", "In Progress", 0, 0)
 	is.Project = &projectRef{Name: "Claude Analytics"}
 	is.Title = "claude analytics: store an API key"
-	if got := issueTarget(is).Label; got != "PD-501 | Claude Analytics | store an API key" {
+	if got := issueTarget(is).Label; got != "Claude Analytics | PD-501 | store an API key" {
 		t.Fatalf("prefixed title: %q", got)
 	}
 	is.Title = "Add deploy-dashboards-prod.yml for author-run prod releases"
-	if got := issueTarget(is).Label; got != "PD-501 | Claude Analytics | Add deploy-dashboar…" {
+	if got := issueTarget(is).Label; got != "Claude Analytics | PD-501 | Add deploy-dashboar…" {
 		t.Fatalf("long title: %q", got)
 	}
 }

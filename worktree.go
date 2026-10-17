@@ -30,9 +30,10 @@ func issueTarget(is issue) target {
 	return target{Branch: branch, Label: shorten(issueLabel(is), 48), TeamKey: is.Team.Key}
 }
 
-// issueLabel names an issue's space "ENG-142 | Project | title", with the
-// title last so shortening cuts it first. A title that opens with its
-// project's name ("Search: fix ranking") drops it rather than say it twice.
+// issueLabel names an issue's space "Project | ENG-142 | title", broad to
+// narrow, with the title last so shortening cuts it first. A title that
+// opens with its project's name ("Search: fix ranking") drops it rather than
+// say it twice.
 func issueLabel(is issue) string {
 	if is.Project == nil {
 		return is.Identifier + " | " + is.Title
@@ -41,7 +42,7 @@ func issueLabel(is issue) string {
 	if head, rest, ok := strings.Cut(title, ":"); ok && strings.EqualFold(strings.TrimSpace(head), is.Project.Name) {
 		title = strings.TrimSpace(rest)
 	}
-	return is.Identifier + " | " + is.Project.Name + " | " + title
+	return is.Project.Name + " | " + is.Identifier + " | " + title
 }
 
 func projectTarget(p project) target {
