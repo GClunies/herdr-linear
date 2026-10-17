@@ -32,17 +32,17 @@ func issueTarget(is issue) target {
 }
 
 // issueLabel names an issue's space so a narrow sidebar shows it whole:
-// "Claude Analytics | PD-503 | extract-load job Claude", from the project
+// "PD-503 | Claude Analytics | extract-load job Claude", from the project
 // "Claude Analytics in Snowflake" and the title "Claude Analytics:
-// extract-load job for the Claude Enterprise Analytics API". It's a first
-// name only: the agent that /ticket starts renames the space once it has
-// read the issue.
+// extract-load job for the Claude Enterprise Analytics API". The ticket
+// comes first so a cut-off name still shows it. It's a first name only: the
+// agent that /ticket starts renames the space once it has read the issue.
 func issueLabel(is issue) string {
 	desc := keyWords(is.Title, 3)
 	if is.Project == nil {
 		return is.Identifier + " | " + desc
 	}
-	return keyWords(is.Project.Name, 2) + " | " + is.Identifier + " | " + desc
+	return is.Identifier + " | " + keyWords(is.Project.Name, 2) + " | " + desc
 }
 
 // fillerWords carry no meaning in a few-word name.

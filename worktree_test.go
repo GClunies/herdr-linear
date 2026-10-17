@@ -24,11 +24,11 @@ func TestIssueTargetUsesLinearBranchName(t *testing.T) {
 func TestIssueTargetLabelIsShortForTheSidebar(t *testing.T) {
 	for _, c := range []struct{ project, title, want string }{
 		{"Claude Analytics in Snowflake", "Claude Analytics: store a read:analytics API key for local, dev, prod Airflow",
-			"Claude Analytics | PD-1 | store read:analytics…"},
+			"PD-1 | Claude Analytics | store read:analytics…"},
 		{"Proposed: Baseline Data & Measurement", "dbt v2 PR B: Make the dbt SQL pass dbt lint",
-			"Baseline Data | PD-1 | Make dbt SQL"},
+			"PD-1 | Baseline Data | Make dbt SQL"},
 		{"Streamlit Dashboard Service", `Move "Business for Sale" filter downstream, + more`,
-			"Streamlit Dashboard | PD-1 | Move Business Sale"},
+			"PD-1 | Streamlit Dashboard | Move Business Sale"},
 	} {
 		is := mkIssue("PD-1", "started", "In Progress", 0, 0)
 		is.Project, is.Title = &projectRef{Name: c.project}, c.title
