@@ -12,7 +12,7 @@ func TestIssueTargetUsesLinearBranchName(t *testing.T) {
 	is.BranchName = "hjortur/act-42-fix-the-thing"
 	is.Team.Key = "ACT"
 	got := issueTarget(is)
-	if got.Branch != "hjortur/act-42-fix-the-thing" || got.TeamKey != "ACT" || got.Label != "ACT-42 | title ACT-42" {
+	if got.Branch != "hjortur/act-42-fix-the-thing" || got.TeamKey != "ACT" || got.Label != "ACT-42 | title ACT-42" { // no project
 		t.Fatalf("%+v", got)
 	}
 	is.BranchName = ""
@@ -21,16 +21,20 @@ func TestIssueTargetUsesLinearBranchName(t *testing.T) {
 	}
 }
 
-func TestIssueTargetLabelNamesProjectOnce(t *testing.T) {
-	is := mkIssue("PD-501", "started", "In Progress", 0, 0)
-	is.Project = &projectRef{Name: "Claude Analytics"}
-	is.Title = "claude analytics: store an API key"
-	if got := issueTarget(is).Label; got != "Claude Analytics | PD-501 | store an API key" {
-		t.Fatalf("prefixed title: %q", got)
-	}
-	is.Title = "Add deploy-dashboards-prod.yml for author-run prod releases"
-	if got := issueTarget(is).Label; got != "Claude Analytics | PD-501 | Add deploy-dashboar…" {
-		t.Fatalf("long title: %q", got)
+func TestIssueTargetLabelIsShortForTheSidebar(t *testing.T) {
+	for _, c := range []struct{ project, title, want string }{
+		{"Claude Analytics in Snowflake", "Claude Analytics: store a read:analytics API key for local, dev, prod Airflow",
+			"Claude Analytics | PD-1 | store read:analytics…"},
+		{"Proposed: Baseline Data & Measurement", "dbt v2 PR B: Make the dbt SQL pass dbt lint",
+			"Baseline Data | PD-1 | Make dbt SQL"},
+		{"Streamlit Dashboard Service", `Move "Business for Sale" filter downstream, + more`,
+			"Streamlit Dashboard | PD-1 | Move Business Sale"},
+	} {
+		is := mkIssue("PD-1", "started", "In Progress", 0, 0)
+		is.Project, is.Title = &projectRef{Name: c.project}, c.title
+		if got := issueTarget(is).Label; got != c.want {
+			t.Errorf("%q / %q: got %q, want %q", c.project, c.title, got, c.want)
+		}
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -30,19 +31,47 @@ func issueTarget(is issue) target {
 	return target{Branch: branch, Label: shorten(issueLabel(is), 48), TeamKey: is.Team.Key}
 }
 
-// issueLabel names an issue's space "Project | ENG-142 | title", broad to
-// narrow, with the title last so shortening cuts it first. A title that
-// opens with its project's name ("Search: fix ranking") drops it rather than
-// say it twice.
+// issueLabel names an issue's space so a narrow sidebar shows it whole:
+// "Claude Analytics | PD-503 | extract-load job Claude", from the project
+// "Claude Analytics in Snowflake" and the title "Claude Analytics:
+// extract-load job for the Claude Enterprise Analytics API". It's a first
+// name only: the agent that /ticket starts renames the space once it has
+// read the issue.
 func issueLabel(is issue) string {
+	desc := keyWords(is.Title, 3)
 	if is.Project == nil {
-		return is.Identifier + " | " + is.Title
+		return is.Identifier + " | " + desc
 	}
-	title := is.Title
-	if head, rest, ok := strings.Cut(title, ":"); ok && strings.EqualFold(strings.TrimSpace(head), is.Project.Name) {
-		title = strings.TrimSpace(rest)
+	return keyWords(is.Project.Name, 2) + " | " + is.Identifier + " | " + desc
+}
+
+// fillerWords carry no meaning in a few-word name.
+var fillerWords = map[string]bool{
+	"a": true, "an": true, "the": true, "to": true, "for": true, "and": true, "or": true,
+	"of": true, "on": true, "in": true, "at": true, "by": true, "with": true, "from": true,
+	"into": true, "its": true, "is": true, "are": true, "be": true, "as": true, "that": true,
+	"this": true, "then": true, "than": true, "via": true, "when": true, "while": true,
+}
+
+// keyWords is the first n words of s that say something. A leading tag of a
+// few words ("dbt v2 PR B: ", "Proposed: ") goes first: titles and project
+// names repeat their scope there. Only a colon and a space end a tag, so
+// "read:analytics" stays one word.
+func keyWords(s string, n int) string {
+	if head, rest, ok := strings.Cut(s, ": "); ok && len(strings.Fields(head)) <= 5 {
+		s = rest
 	}
-	return is.Project.Name + " | " + is.Identifier + " | " + title
+	var kept []string
+	for _, w := range strings.Fields(s) {
+		w = strings.Trim(w, ",;.()\"'")
+		if fillerWords[strings.ToLower(w)] || !strings.ContainsFunc(w, unicode.IsLetter) && !strings.ContainsFunc(w, unicode.IsDigit) {
+			continue
+		}
+		if kept = append(kept, w); len(kept) == n {
+			break
+		}
+	}
+	return strings.Join(kept, " ")
 }
 
 func projectTarget(p project) target {
