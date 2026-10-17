@@ -1,0 +1,16 @@
+worktree.go
+  h_54e5c83907823d 14,34-39,41,43,45-72,74
+worktree_test.go
+  h_54e5c83907823d 15,24-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e6d3335eca5710c256077f6ce583f3bb54d4f551",
+  "prompts": {},
+  "humans": {
+    "h_54e5c83907823d": {
+      "author": "Gregory Clunies <greg.clunies@gmail.com>"
+    }
+  }
+}
