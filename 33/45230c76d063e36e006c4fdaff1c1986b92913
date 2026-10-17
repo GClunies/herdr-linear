@@ -1,0 +1,32 @@
+README.md
+  h_54e5c83907823d 528,539
+cache.go
+  h_54e5c83907823d 23-24,27,57-59,62,68-70,75-76
+cache_test.go
+  h_54e5c83907823d 65,82-99
+config.example.json
+  h_54e5c83907823d 6-9
+config.go
+  h_54e5c83907823d 9,47-66
+create.go
+  h_54e5c83907823d 212-213,220
+create_test.go
+  h_54e5c83907823d 51-68
+linear.go
+  h_54e5c83907823d 205-238,305,307-308,325-327,339,341-342,351,355-356
+linear_test.go
+  h_54e5c83907823d 125-193
+tui.go
+  h_54e5c83907823d 291,334-335
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3345230c76d063e36e006c4fdaff1c1986b92913",
+  "prompts": {},
+  "humans": {
+    "h_54e5c83907823d": {
+      "author": "Gregory Clunies <greg.clunies@gmail.com>"
+    }
+  }
+}
