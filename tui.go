@@ -218,6 +218,7 @@ type model struct {
 	recent    []issue        // the Recent tab's issues, newest first
 	drilled   *project       // the project whose issues are shown, if any
 	proj      *projectIssues // drilled's issues, once they've loaded
+	asList    bool           // drilled's open issues by status, not its graph (ctrl+g)
 	loaded    map[tab]bool
 	stale     map[tab]bool // it's the list from last time; the fresh one is on its way
 	cache     bool         // lists are kept between popups (cache.go); not the demo's
@@ -280,8 +281,58 @@ func newModel(ctx context.Context, cfg config, invoked string) model {
 		ctx: ctx, cfg: cfg, baseCfg: cfg, client: &linearClient{cfg: cfg}, invoked: invoked,
 		mode: modeLoading, filter: ti, spin: sp, loaded: map[tab]bool{}, stale: map[tab]bool{}, worktrees: map[string]bool{},
 		states: map[string][]workflowState{}, md: newMarkdown(cfg.Theme != "light"),
-		mouseX: -1, mouseY: -1,
+		mouseX: -1, mouseY: -1, asList: savedAsList(),
 	}
+}
+
+// graphing is whether a project's issues are shown as its graph: in a
+// project, unless ctrl+g put them in a list.
+func (m model) graphing() bool { return m.drilled != nil && !m.asList }
+
+// issue-view holds "list" while ctrl+g has a project's issues in a list, so
+// that the next popup opens on the view you left. The graph is the default.
+func issueViewPath() string { return filepath.Join(stateDir(), "issue-view") }
+
+func savedAsList() bool {
+	data, _ := os.ReadFile(issueViewPath())
+	return strings.TrimSpace(string(data)) == "list"
+}
+
+func saveAsList(asList bool) error {
+	if !asList {
+		if err := os.Remove(issueViewPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(stateDir(), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(issueViewPath(), []byte("list\n"), 0o600)
+}
+
+// switchView turns a project's issues from graph to list or back, keeping
+// the selected issue if the other view shows it, else going to the top.
+func (m model) switchView() (tea.Model, tea.Cmd) {
+	var was string
+	if r := m.selected(); r != nil && r.issue != nil {
+		was = r.issue.ID
+	}
+	m.asList = !m.asList
+	m.filter.SetValue("")
+	m.cursor, m.offset, m.xoff = 0, 0, 0
+	for i, r := range m.rows() {
+		if r.issue != nil && r.issue.ID == was {
+			m.cursor = i
+		}
+	}
+	m.scrollTo()
+	if m.cache {
+		if err := saveAsList(m.asList); err != nil {
+			m.err = "Couldn't keep the view for next time: " + err.Error()
+		}
+	}
+	return m, nil
 }
 
 func (m model) Init() tea.Cmd {
@@ -837,6 +888,11 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+f":
 		return m.openFilter()
+	case "ctrl+g":
+		if m.drilled != nil {
+			return m.switchView()
+		}
+		return m, nil
 	case "tab", "shift+tab":
 		step := tab(1)
 		if k.String() == "shift+tab" {
@@ -851,9 +907,9 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		switch {
-		case m.drilled != nil && k.String() == "left":
+		case m.graphing() && k.String() == "left":
 			m.step(-1, 0)
-		case m.drilled != nil:
+		case m.graphing():
 			m.step(1, 0)
 		case k.String() == "right" && m.tab < tabCount-1:
 			return m.switchTab(m.tab + 1)
@@ -918,7 +974,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openCreate(p, nil)
 	}
 
-	if m.drilled != nil {
+	if m.graphing() {
 		return m, nil // a graph has no filter to type in
 	}
 	// Anything else edits the filter.
@@ -1142,18 +1198,25 @@ func (m model) rows() []row {
 		}
 	}
 	switch {
-	case m.drilled != nil:
+	case m.drilled != nil && m.proj == nil:
+	case m.graphing():
 		// Its graph, column by column, then the issues linked to nothing.
 		// There's no filtering a graph.
-		if m.proj == nil {
-			break
-		}
 		g := &m.proj.graph
 		for i := range g.Nodes {
 			rows = append(rows, row{issue: g.Nodes[i].Issue, node: &g.Nodes[i]})
 		}
 		for _, is := range g.Unlinked {
 			rows = append(rows, row{issue: is, group: "Not linked"})
+		}
+	case m.drilled != nil:
+		// Its own open issues by status: no done ones, and no blockers from
+		// elsewhere, which only the graph shows.
+		for i := range m.proj.issues {
+			is := &m.proj.issues[i]
+			if is.Project != nil && is.Project.ID == m.drilled.ID && is.State.Type != "completed" && is.matches(q) {
+				rows = append(rows, row{issue: is, group: is.State.Name, hue: is.State.Color})
+			}
 		}
 	case m.tab == tabRecent:
 		// Newest first, as filed: no status groups to scatter them.
@@ -1226,7 +1289,7 @@ func (m *model) reselect(key string) {
 // move moves the selection delta rows down the list (up, for a negative
 // delta); in a project's graph, delta steps down (or up) it.
 func (m *model) move(delta int) {
-	if m.drilled != nil {
+	if m.graphing() {
 		dy := 1
 		if delta < 0 {
 			dy, delta = -1, -delta
@@ -1334,7 +1397,7 @@ func (m model) viewHeading(rows []row, r row) string {
 
 // scrollTo keeps the selected row on screen, heading and all.
 func (m *model) scrollTo() {
-	if m.drilled != nil {
+	if m.graphing() {
 		m.scrollGraph()
 		return
 	}
@@ -1375,7 +1438,7 @@ func (m *model) scrollGraph() {
 // visibleRows is how many rows fit from the offset: a page; in a project's
 // graph, its lines shown.
 func (m model) visibleRows() int {
-	if m.drilled != nil {
+	if m.graphing() {
 		return m.graphHeight()
 	}
 	rows := m.rows()
@@ -1397,7 +1460,7 @@ func (m model) rowAt(x, y int) (int, bool) {
 	if m.screen != screenList {
 		return 0, false
 	}
-	if m.drilled != nil {
+	if m.graphing() {
 		return m.graphRowAt(x, y)
 	}
 	rows := m.rows()
@@ -1504,7 +1567,7 @@ func (m model) view() string {
 		return b.String()
 	}
 
-	if m.drilled != nil {
+	if m.graphing() {
 		b.WriteString("\n" + m.viewGraph())
 	} else {
 		b.WriteString("\n" + m.filter.View() + "\n\n" + m.viewList())
@@ -1662,7 +1725,7 @@ func (m model) about() string {
 	if r == nil {
 		return ""
 	}
-	if m.drilled != nil {
+	if m.graphing() {
 		return m.issueInfo(*r.issue)
 	}
 	left, branch := "", ""
@@ -2061,7 +2124,14 @@ func (m model) footer() []hint {
 		}
 		hs = append(hs, hint{w, "ctrl+w", hintAct})
 	}
-	hs = append(hs, hint{"^c new issue", "ctrl+c", hintAct}, hint{"^o open in Linear", "ctrl+o", hintView}, hint{"^r refresh", "ctrl+r", hintView}, hint{"^f teams", "ctrl+f", hintView})
+	hs = append(hs, hint{"^c new issue", "ctrl+c", hintAct}, hint{"^o open in Linear", "ctrl+o", hintView})
+	switch {
+	case m.graphing():
+		hs = append(hs, hint{"^g list", "ctrl+g", hintView})
+	case m.drilled != nil:
+		hs = append(hs, hint{"^g graph", "ctrl+g", hintView})
+	}
+	hs = append(hs, hint{"^r refresh", "ctrl+r", hintView}, hint{"^f teams", "ctrl+f", hintView})
 	if len(m.index.Workspaces) > 1 {
 		hs = append(hs, hint{"^t workspace", "ctrl+t", hintView})
 	}

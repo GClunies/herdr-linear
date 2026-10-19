@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,6 +25,7 @@ func demoModel(t *testing.T) model {
 	oldR := readStore
 	readStore = func(string) (*tokens, error) { t.Error("demo read the keychain"); return nil, errSignedOut }
 	t.Cleanup(func() { graphqlURL, tokenURL, readStore = oldG, oldT, oldR; srv.Close() })
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", t.TempDir()) // not your saved choices
 
 	m := newModel(context.Background(), config{}, "")
 	m.client = newDemoSource()
@@ -127,6 +129,51 @@ func selectIssue(t *testing.T, m model, id string, keys ...string) model {
 		t.Fatalf("after %v on %s, want %s", keys, got, id)
 	}
 	return m
+}
+
+// ctrl+g switches a project's issues between the graph and a list by status
+// of its own open issues, keeping the selected issue where both show it. The
+// next popup opens on the view you left.
+func TestDemoCtrlGSwitchesBetweenGraphAndList(t *testing.T) {
+	m := offlineSync(t)
+	m.cache = true // the real popup keeps the view; the demo doesn't
+	footer := func(m model) string { return strings.Split(screenText(m), "\n")[m.height-1] }
+	if !strings.Contains(footer(m), "^g list") {
+		t.Errorf("graph footer %q", footer(m))
+	}
+
+	// HAL-201 is done: the list hasn't it, so the selection goes to the top.
+	m = press(m, "ctrl+g")
+	if m.graphing() || m.cursor != 0 {
+		t.Fatalf("graphing %v, cursor %d", m.graphing(), m.cursor)
+	}
+	var listed []string
+	for _, r := range m.rows() {
+		listed = append(listed, r.issue.Identifier)
+	}
+	slices.Sort(listed)
+	if want := []string{"HAL-205", "HAL-212", "HAL-216", "HAL-219", "HAL-226", "HAL-228"}; !slices.Equal(listed, want) {
+		t.Errorf("listed %v, want %v: open, and the project's own", listed, want)
+	}
+	if !strings.Contains(footer(m), "^g graph") {
+		t.Errorf("list footer %q", footer(m))
+	}
+	if !newModel(context.Background(), config{}, "").asList {
+		t.Error("the next popup should open on the list")
+	}
+
+	// The list filters; the graph keeps what was picked there.
+	m = press(m, "toolbar")
+	m = selectIssue(t, press(m, "ctrl+g"), "HAL-216")
+	if !m.graphing() || m.filter.Value() != "" {
+		t.Fatalf("graphing %v, filter %q", m.graphing(), m.filter.Value())
+	}
+	if newModel(context.Background(), config{}, "").asList {
+		t.Error("the next popup should open on the graph")
+	}
+
+	m = selectIssue(t, m, "HAL-205", "up", "right")
+	selectIssue(t, press(m, "ctrl+g"), "HAL-205")
 }
 
 // The arrows go to the nearest issue that way: across the columns, up and

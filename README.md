@@ -297,6 +297,8 @@ A project's issues are a graph of what blocks what, done ones too. Work runs lef
 
 The arrows go to the nearest issue that way. The selected issue's own lines, to what blocks it and to what it blocks, are drawn bright and the rest stay dim, so its links stand out where lines meet. Down from the graph's bottom line goes into *Not linked*, and up from its top comes back. The view scrolls, down and sideways, to keep the selection on screen. The line above the keys has the selected issue's title, status, PR stage, *worktree open* when it has one, and what still blocks it (*after HAL-201, HAL-245*). Enter, `ctrl+s`, `ctrl+w` and `ctrl+o` work as in the lists, and esc goes back to the projects. There's no filtering a graph.
 
+`ctrl+g` switches to a list of the project's open issues by status, which you can filter, and back. The selected issue stays selected when the other view shows it. The next popup opens on the view you left.
+
 ### Recent
 
 The third tab lists the issues you created lately, newest first: the last 50,
@@ -387,6 +389,7 @@ In the list:
 | ctrl+c               | a new issue, in the selected or open project if any (see [New issues](#new-issues)) |
 | ctrl+o               | open in Linear                                         |
 | ctrl+r               | refresh                                                |
+| ctrl+g               | in a project, switch its issues between graph and list |
 | ctrl+f               | choose the teams the lists show (see [Teams](#teams))  |
 | ctrl+t               | switch Linear workspace (see [More than one workspace](#more-than-one-workspace)) |
 | tab, ← →             | switch between My issues, Projects and Recent          |
@@ -744,6 +747,10 @@ made with enter in [Teams](#teams) doesn't replace them.
 `filters.json` has each workspace's default teams (see [Teams](#teams)), by
 workspace ID: team keys, nothing else. It's `0600`, and a workspace's goes
 when you sign out of it.
+
+`issue-view` is there while `ctrl+g` has a project's issues in a list: it
+holds the word `list`, nothing else, and goes when you switch back to the
+graph. The demo keeps nothing.
 
 What the keychain and keyring do and don't protect: on macOS the item is created by
 the `security` tool, so it's the `security` tool the keychain trusts to read
