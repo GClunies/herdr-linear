@@ -113,6 +113,24 @@ func TestStatusPickerMovesIssueAndResortsList(t *testing.T) {
 	}
 }
 
+// A project's issues include its done ones, for its graph: moving one to
+// Done keeps it there, and Canceled takes it off.
+func TestProjectIssuesKeepDoneWorkAndDropCanceled(t *testing.T) {
+	m := withIDs(twoGroups())
+	m.drilled = &project{ID: "p1"}
+	m.proj = newProjectIssues([]issue{m.issues[0], m.issues[1]}, "p1")
+	for id, s := range map[string]workflowState{
+		"id-A-1": {ID: "done", Name: "Done", Type: "completed"},
+		"id-A-2": {ID: "canceled", Name: "Canceled", Type: "canceled"},
+	} {
+		next, _ := m.Update(stateSetMsg{issueID: id, state: s})
+		m = next.(model)
+	}
+	if is := m.proj.issues; len(is) != 1 || is[0].Identifier != "A-1" || is[0].State.Name != "Done" {
+		t.Fatalf("project issues %+v", is)
+	}
+}
+
 func TestMovingBetweenOpenStatesResorts(t *testing.T) {
 	m := withIDs(twoGroups())
 	todo := workflowState{ID: "todo", Name: "Todo", Type: "unstarted", Position: 1}

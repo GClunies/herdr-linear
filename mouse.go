@@ -11,6 +11,10 @@ import (
 // another blank.
 const listTop = 4
 
+// graphTop is the first line of a project's graph: under the tabs and a
+// blank. A graph has no filter.
+const graphTop = 2
+
 // renderFooter draws the keys along the bottom, the one under the pointer
 // lit so it reads as clickable.
 func (m model) renderFooter(hs []hint) string {
@@ -33,7 +37,7 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if m.mode == modeBusy || m.mode == modeLoading {
 			return m, nil
 		}
-		if i, ok := m.rowAt(ev.Y); ok {
+		if i, ok := m.rowAt(ev.X, ev.Y); ok {
 			// Within what's shown: the list never scrolls under the pointer.
 			m.cursor, m.chose = i, true
 		} else if i, ok := m.stateAt(ev.Y); ok {
@@ -95,7 +99,7 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if i, ok := m.rowAt(ev.Y); ok {
+	if i, ok := m.rowAt(ev.X, ev.Y); ok {
 		m.cursor, m.chose, m.flash = i, true, ""
 		return m.activate(false)
 	}
@@ -158,7 +162,7 @@ func (m model) clickTab(x int) (tea.Model, tea.Cmd) {
 		return m.switchTab(want)
 	}
 	if m.drilled != nil {
-		m.drilled, m.projIss = nil, nil
+		m.drilled, m.proj = nil, nil
 		m.cursor, m.offset, m.chose = 0, 0, false
 		m.clampCursor()
 	}

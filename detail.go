@@ -203,14 +203,15 @@ func (m model) updateDetail(msg tea.Msg) (model, bool) {
 
 // applyState updates the issue everywhere it is listed, so the lists are right
 // without a refetch.
-// Both lists hold open issues only, so an issue moved to Done or Canceled
-// leaves them; the issue screen you're on keeps showing it.
+// My issues holds open issues only, so an issue moved to Done or Canceled
+// leaves it; a project's hold done ones too, for its graph, so only
+// Canceled leaves them. The issue screen you're on keeps showing it.
 func (m *model) applyState(issueID string, s workflowState) {
-	update := func(list []issue) []issue {
+	update := func(list []issue, keep bool) []issue {
 		out := list[:0]
 		for _, x := range list {
 			if x.ID == issueID {
-				if !isOpenState(s.Type) {
+				if !keep {
 					continue
 				}
 				x.State = s
@@ -220,7 +221,10 @@ func (m *model) applyState(issueID string, s workflowState) {
 		sortIssues(out)
 		return out
 	}
-	m.issues, m.projIss = update(m.issues), update(m.projIss)
+	m.issues = update(m.issues, isOpenState(s.Type))
+	if m.proj != nil {
+		m.proj = newProjectIssues(update(m.proj.issues, s.Type != "canceled"), m.drilled.ID)
+	}
 	// Searched for, or filed by you: these stay listed even when closed.
 	for _, list := range [][]issue{m.lookup, m.recent} {
 		for i := range list {
@@ -351,9 +355,10 @@ func (m model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.openCreate(&p, nil)
 		case "i", "enter":
 			m.screen = screenList
-			m.drilled, m.projIss = &p, nil
+			m.drilled, m.proj = &p, nil
 			m.filter.SetValue("")
 			m.cursor, m.offset, m.chose, m.mode = 0, 0, false, modeLoading
+			m.xoff, m.col = 0, 0
 			return m, tea.Batch(m.spin.Tick, m.loadProjectIssues(p))
 		}
 		return m, nil

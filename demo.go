@@ -159,10 +159,54 @@ func newDemoSource() *demoSource {
 	// Teammates' work, seen inside projects.
 	add("205", "Sync queue survives an app kill mid-upload", "s-progress", 2, "a1f3", demoTomas, false)
 	add("219", "Conflict banner copy and undo", "s-todo", 3, "a1f3", demoAda, false)
-	add("226", "Tombstones for notes deleted on another device", "s-backlog", 3, "a1f3", nil, false)
+	add("226", "Tombstones for notes deleted on another device", "s-progress", 3, "a1f3", demoTomas, false)
+	add("201", "Queue local writes and replay them in order", "s-done", 2, "a1f3", demoTomas, false)
+	add("216", "Sync status in the toolbar", "s-todo", 4, "a1f3", demoAda, false)
+	add("228", "End-to-end tests for offline editing", "s-backlog", 3, "a1f3", nil, false)
+	add("223", "Sync over Bluetooth", "s-canceled", 4, "a1f3", nil, false)
+	add("245", "Retry budget for the API client", "s-progress", 2, "d4e8", demoTomas, false)
 	add("233", "Typo-tolerant matching (edit distance 1)", "s-review", 2, "b27c", demoPriya, false)
 	add("238", "Rank recently opened notes higher", "s-todo", 3, "b27c", nil, false)
 	add("249", "PDF export with a table of contents", "s-backlog", 4, "c9d0", demoAda, false)
+
+	// Offline sync's work, in the order it can be done (its graph): one
+	// issue from Platform hardening holds it up, and HAL-201 → HAL-228 is
+	// implied by the rest, so it isn't drawn.
+	find := func(num string) *issue {
+		for i := range d.issues {
+			if d.issues[i].ID == "i-"+num {
+				return &d.issues[i]
+			}
+		}
+		panic("demo: no issue " + num)
+	}
+	blocks := func(from, to string) {
+		b, is := find(from), find(to)
+		is.InverseRelations.Nodes = append(is.InverseRelations.Nodes,
+			relation{Type: "blocks", Issue: linkedIssue{ID: b.ID, Identifier: b.Identifier, State: b.State}})
+	}
+	blocks("201", "212")
+	blocks("201", "205")
+	blocks("245", "205")
+	blocks("212", "219")
+	blocks("205", "226")
+	blocks("219", "228")
+	blocks("226", "228")
+	blocks("201", "228")
+	prNumber := 400
+	prs := func(num string, statuses ...string) {
+		is := find(num)
+		for _, st := range statuses {
+			prNumber++
+			a := attachment{URL: fmt.Sprintf("https://github.com/halcyon/app/pull/%d", prNumber)}
+			a.Metadata.Status = st
+			is.Attachments.Nodes = append(is.Attachments.Nodes, a)
+		}
+	}
+	prs("201", "merged")
+	prs("205", "draft")
+	prs("212", "closed", "merged")
+	prs("219", "closed")
 
 	// Filed by you, newest first: some yours, some handed on, one still in triage.
 	d.created = []string{"i-252", "i-247", "i-238", "i-226", "i-219", "i-244"}
@@ -263,16 +307,25 @@ func (d *demoSource) projects(_ context.Context, f listFilter) ([]project, error
 	return ps, nil
 }
 
+// projectIssues is a project's issues, done ones too, and the open ones
+// elsewhere that block them, as Linear's projectIssues returns them.
 func (d *demoSource) projectIssues(_ context.Context, projectID string) ([]issue, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var out []issue
 	for _, is := range d.issues {
-		if is.Project != nil && is.Project.ID == projectID && isOpenState(is.State.Type) {
+		if is.Project != nil && is.Project.ID == projectID && is.State.Type != "canceled" {
 			out = append(out, is)
 		}
 	}
 	sortIssues(out)
+	for _, id := range outsideBlockers(out) {
+		for _, is := range d.issues {
+			if is.ID == id {
+				out = append(out, is)
+			}
+		}
+	}
 	return out, nil
 }
 

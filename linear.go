@@ -170,6 +170,70 @@ type issue struct {
 	Team       team          `json:"team"`
 	Project    *projectRef   `json:"project"`
 	Assignee   *person       `json:"assignee"`
+	// InverseRelations are the relations that point at this issue: a
+	// "blocks" one names an issue that blocks it. Linear's first 20.
+	InverseRelations struct {
+		Nodes []relation `json:"nodes"`
+	} `json:"inverseRelations"`
+	// Attachments are its GitHub links, its first 25. Only a project's
+	// issues load them (projectIssues), for the graph's PR stages.
+	Attachments struct {
+		Nodes []attachment `json:"nodes"`
+	} `json:"attachments"`
+}
+
+// relation is one of an issue's relations, seen from the issue it points at.
+type relation struct {
+	Type  string      `json:"type"` // blocks | duplicate | related | similar
+	Issue linkedIssue `json:"issue"`
+}
+
+// linkedIssue is the little of another issue that a relation carries.
+type linkedIssue struct {
+	ID         string        `json:"id"`
+	Identifier string        `json:"identifier"`
+	State      workflowState `json:"state"` // its type only
+}
+
+// attachment is a link on an issue. GitHub's metadata carries a pull
+// request's status: draft, open, inReview, merged or closed. A commit link
+// carries one too, and a link to a PR comment carries none.
+type attachment struct {
+	URL      string `json:"url"`
+	Metadata struct {
+		Status string `json:"status"`
+	} `json:"metadata"`
+}
+
+// blockers are the issues that block this one, canceled ones left out:
+// canceled work blocks nothing. Done ones stay, so the graph can show them.
+func (is issue) blockers() []linkedIssue {
+	var out []linkedIssue
+	for _, r := range is.InverseRelations.Nodes {
+		if r.Type == "blocks" && r.Issue.State.Type != "canceled" {
+			out = append(out, r.Issue)
+		}
+	}
+	return out
+}
+
+// outsideBlockers lists the ids of the open issues that block one of
+// issues but aren't among them, each once, in the order first met.
+func outsideBlockers(issues []issue) []string {
+	seen := map[string]bool{}
+	for _, is := range issues {
+		seen[is.ID] = true
+	}
+	var out []string
+	for _, is := range issues {
+		for _, b := range is.blockers() {
+			if !seen[b.ID] && isOpenState(b.State.Type) {
+				seen[b.ID] = true
+				out = append(out, b.ID)
+			}
+		}
+	}
+	return out
 }
 
 type projectStatus struct {
@@ -206,6 +270,7 @@ fragment IssueFields on Issue {
   team { id key }
   project { id name }
   assignee { id displayName isMe }
+  inverseRelations(first: 20) { nodes { type issue { id identifier state { type } } } }
 }`
 
 // notDone matches an issue state or project status that isn't finished.
@@ -329,6 +394,10 @@ func (c *linearClient) createdIssues(ctx context.Context, f listFilter) ([]issue
 	return res.Viewer.CreatedIssues.Nodes, nil
 }
 
+// projectIssues returns the project's issues, done ones too but never
+// canceled, sorted as the lists are; then the open issues outside the
+// project that block one of them (no project, or another one), for its
+// graph to draw dim at the left. The project's own carry their GitHub links.
 func (c *linearClient) projectIssues(ctx context.Context, projectID string) ([]issue, error) {
 	type reply struct {
 		Project struct {
@@ -336,12 +405,29 @@ func (c *linearClient) projectIssues(ctx context.Context, projectID string) ([]i
 		} `json:"project"`
 	}
 	q := `query($id: String!, $after: String, $filter: IssueFilter) { project(id: $id) { issues(first: 100, after: $after, orderBy: updatedAt, filter: $filter) {
-  nodes { ...IssueFields } ` + pageFields + ` } } }` + issueFields
-	vars := map[string]any{"id": projectID, "filter": openIssues}
+  nodes { ...IssueFields ` + attachmentFields + ` } ` + pageFields + ` } } }` + issueFields
+	vars := map[string]any{"id": projectID, "filter": map[string]any{"state": map[string]any{"type": map[string]any{"neq": "canceled"}}}}
 	issues, err := fetchAll(ctx, c, q, vars, func(r *reply) *connection[issue] { return &r.Project.Issues })
 	sortIssues(issues)
-	return issues, err
+	ids := outsideBlockers(issues)
+	if len(ids) == 0 {
+		return issues, err
+	}
+	var res struct {
+		Issues struct {
+			Nodes []issue `json:"nodes"`
+		} `json:"issues"`
+	}
+	// One page: past 100 blockers from elsewhere, the rest go undrawn.
+	q = `query($ids: [ID!]) { issues(first: 100, filter: { id: { in: $ids } }) { nodes { ...IssueFields } } }` + issueFields
+	if xerr := c.query(ctx, q, map[string]any{"ids": ids}, &res); xerr != nil {
+		return nil, xerr
+	}
+	return append(issues, res.Issues.Nodes...), err
 }
+
+// attachmentFields selects an issue's GitHub links, for its PR stage.
+const attachmentFields = `attachments(first: 25, filter: { sourceType: { eq: "github" } }) { nodes { url metadata } }`
 
 func (c *linearClient) projects(ctx context.Context, f listFilter) ([]project, error) {
 	type reply struct {

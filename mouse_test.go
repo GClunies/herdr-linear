@@ -62,6 +62,29 @@ func TestOneClickOpens(t *testing.T) {
 	}
 }
 
+// In a project's graph the issues are where their labels are drawn: hover
+// one to select it, click one to open it.
+func TestGraphIssuesAreUnderThePointer(t *testing.T) {
+	m := offlineSync(t)
+	x, y := locate(t, m, "HAL-226")
+	if m = hover(m, x, y); selectedID(m) != "HAL-226" {
+		t.Fatalf("hover selected %s", selectedID(m))
+	}
+	if hm := hover(m, x-4, y); selectedID(hm) != "HAL-226" { // HAL-205's line into it
+		t.Fatalf("hovering a line between issues selected %s", selectedID(hm))
+	}
+	x, y = locate(t, m, "HAL-219")
+	m, cmd := click(m, x, y)
+	if m.screen != screenIssue || m.cur.Identifier != "HAL-219" || cmd == nil {
+		t.Fatalf("one click should open HAL-219: screen %v", m.screen)
+	}
+	m = offlineSync(t)
+	x, y = locate(t, m, "HAL-216")
+	if m, _ = click(m, x, y); m.screen != screenIssue || m.cur.Identifier != "HAL-216" {
+		t.Fatalf("clicking a Not linked row should open it: screen %v", m.screen)
+	}
+}
+
 func TestHoverHighlightsWithoutOpening(t *testing.T) {
 	m := withIDs(twoGroups())
 	x, y := locate(t, m, "A-3")

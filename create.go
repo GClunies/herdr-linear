@@ -218,17 +218,16 @@ func (m *model) addCreated(is issue) {
 	if m.loaded[tabRecent] && inFilter {
 		m.recent = append([]issue{is}, m.recent...)
 	}
-	if !isOpenState(is.State.Type) {
-		m.clampCursor()
-		return
-	}
-	if is.Assignee != nil && is.Assignee.IsMe && inFilter {
+	if is.Assignee != nil && is.Assignee.IsMe && inFilter && isOpenState(is.State.Type) {
 		m.issues = append(m.issues, is)
 		sortIssues(m.issues)
 	}
-	if m.drilled != nil && is.Project != nil && is.Project.ID == m.drilled.ID {
-		m.projIss = append(m.projIss, is)
-		sortIssues(m.projIss)
+	// A project's issues hold its done ones too, for its graph. They may not
+	// have loaded: their load can fail and leave you in the project.
+	if m.proj != nil && is.Project != nil && is.Project.ID == m.drilled.ID && is.State.Type != "canceled" {
+		list := append(m.proj.issues, is)
+		sortIssues(list)
+		m.proj = newProjectIssues(list, m.drilled.ID)
 	}
 	m.clampCursor()
 }

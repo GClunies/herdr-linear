@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -157,8 +158,23 @@ func colored(glyph, hex string) string {
 type row struct {
 	issue   *issue
 	project *project
-	group   string // the heading it's listed under (its status); "" for none
-	hue     string // the heading's colour: the status's own
+	group   string     // the heading it's listed under (its status); "" for none
+	hue     string     // the heading's colour: the status's own
+	node    *graphNode // where it's drawn, in a project's graph
+}
+
+// projectIssues are a project's issues as projectIssues returns them, and
+// their graph, built with them: building it on every look would be slow
+// for a big project, and apart they could disagree.
+type projectIssues struct {
+	issues []issue
+	graph  projectGraph // its nodes point into issues
+}
+
+func newProjectIssues(issues []issue, projectID string) *projectIssues {
+	p := &projectIssues{issues: issues}
+	p.graph = buildGraph(p.issues, projectID)
+	return p
 }
 
 // key names a row's issue or project, to find it again in a fresher list.
@@ -199,15 +215,18 @@ type model struct {
 	err       string // last error, shown above the footer
 	issues    []issue
 	projects  []project
-	recent    []issue  // the Recent tab's issues, newest first
-	drilled   *project // the project whose issues are listed, if any
-	projIss   []issue
+	recent    []issue        // the Recent tab's issues, newest first
+	drilled   *project       // the project whose issues are shown, if any
+	proj      *projectIssues // drilled's issues, once they've loaded
 	loaded    map[tab]bool
 	stale     map[tab]bool // it's the list from last time; the fresh one is on its way
 	cache     bool         // lists are kept between popups (cache.go); not the demo's
 	worktrees map[string]bool
 	cursor    int
-	offset    int
+	offset    int // the first row shown; in a project's graph, the first line
+	// In a project's graph: the first cell shown of its lines, and the cell
+	// the selection last left the graph from, to come back up to.
+	xoff, col int
 	// chose: you put the cursor where it is. Until then it stays on the top
 	// row, whatever a fresher list puts there; after, it follows your pick.
 	chose     bool
@@ -311,7 +330,7 @@ func (m model) useWorkspace(w workspace, remember bool) (model, tea.Cmd) {
 // ones are dropped.
 func (m model) relist() (model, tea.Cmd) {
 	m.gen++
-	m.issues, m.projects, m.recent, m.drilled, m.projIss = nil, nil, nil, nil, nil
+	m.issues, m.projects, m.recent, m.drilled, m.proj = nil, nil, nil, nil, nil
 	m.lookup, m.lookupFor, m.lookingUp = nil, "", ""
 	m.loaded, m.stale = map[tab]bool{}, map[tab]bool{}
 	m.cursor, m.offset, m.chose, m.err = 0, 0, false, ""
@@ -550,7 +569,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.drilled != nil && m.drilled.ID == msg.projectID {
 			key := m.selectedKey()
-			m.projIss = msg.issues
+			m.proj = newProjectIssues(msg.issues, msg.projectID)
 			if !m.modal() {
 				m.mode = modeList
 			}
@@ -723,7 +742,7 @@ func (m model) modal() bool {
 // waited for: every tab loads when the popup opens, and another's landing
 // first doesn't make this one ready. Not while something modal is on screen.
 func (m *model) doneLoading(t tab) {
-	if !m.modal() && (m.tab == t || m.loaded[m.tab]) && (m.drilled == nil || m.projIss != nil) {
+	if !m.modal() && (m.tab == t || m.loaded[m.tab]) && (m.drilled == nil || m.proj != nil) {
 		m.mode = modeList
 	}
 }
@@ -805,7 +824,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.filter.SetValue("")
 			m.cursor, m.offset, m.chose = 0, 0, false
 		case m.drilled != nil:
-			m.drilled, m.projIss = nil, nil
+			m.drilled, m.proj = nil, nil
 			m.cursor, m.offset, m.chose = 0, 0, false
 		default:
 			return m.leave()
@@ -825,16 +844,17 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.switchTab((m.tab + step) % tabCount)
 	case "left", "right":
-		// With text in the filter, arrows edit it; otherwise they move
-		// between tabs, stopping at either end, and ← leaves a project's issues.
+		// With text in the filter, arrows edit it. In a project's graph they
+		// move across it, stopping at either end: esc leaves it. Otherwise
+		// they move between tabs, stopping at either end.
 		if m.filter.Value() != "" {
 			break
 		}
 		switch {
-		case k.String() == "left" && m.drilled != nil:
-			m.drilled, m.projIss = nil, nil
-			m.cursor, m.offset, m.chose = 0, 0, false
-			m.clampCursor()
+		case m.drilled != nil && k.String() == "left":
+			m.step(-1, 0)
+		case m.drilled != nil:
+			m.step(1, 0)
 		case k.String() == "right" && m.tab < tabCount-1:
 			return m.switchTab(m.tab + 1)
 		case k.String() == "left" && m.tab > 0:
@@ -880,7 +900,12 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+s":
 		return m.activate(true)
 	case "ctrl+w":
-		if r := m.selected(); r != nil && r.project != nil {
+		switch r := m.selected(); {
+		case r == nil:
+		case r.issue != nil:
+			is := *r.issue
+			return m.runWorktree(issueTarget(is), &is, false)
+		default:
 			return m.runWorktree(projectTarget(*r.project), nil, false)
 		}
 		return m, nil
@@ -893,6 +918,9 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openCreate(p, nil)
 	}
 
+	if m.drilled != nil {
+		return m, nil // a graph has no filter to type in
+	}
 	// Anything else edits the filter.
 	prev := m.filter.Value()
 	var cmd tea.Cmd
@@ -907,7 +935,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // switchTab shows tab t's list, loading it the first time.
 func (m model) switchTab(t tab) (tea.Model, tea.Cmd) {
-	m.drilled, m.projIss, m.err = nil, nil, ""
+	m.drilled, m.proj, m.err = nil, nil, ""
 	m.tab, m.cursor, m.offset, m.chose = t, 0, 0, false
 	if !m.loaded[m.tab] {
 		m.mode = modeLoading
@@ -1115,7 +1143,18 @@ func (m model) rows() []row {
 	}
 	switch {
 	case m.drilled != nil:
-		addIssues(m.projIss)
+		// Its graph, column by column, then the issues linked to nothing.
+		// There's no filtering a graph.
+		if m.proj == nil {
+			break
+		}
+		g := &m.proj.graph
+		for i := range g.Nodes {
+			rows = append(rows, row{issue: g.Nodes[i].Issue, node: &g.Nodes[i]})
+		}
+		for _, is := range g.Unlinked {
+			rows = append(rows, row{issue: is, group: "Not linked"})
+		}
 	case m.tab == tabRecent:
 		// Newest first, as filed: no status groups to scatter them.
 		for i := range m.recent {
@@ -1184,12 +1223,69 @@ func (m *model) reselect(key string) {
 	m.clampCursor()
 }
 
+// move moves the selection delta rows down the list (up, for a negative
+// delta); in a project's graph, delta steps down (or up) it.
 func (m *model) move(delta int) {
+	if m.drilled != nil {
+		dy := 1
+		if delta < 0 {
+			dy, delta = -1, -delta
+		}
+		for range delta {
+			m.step(0, dy)
+		}
+		return
+	}
 	rows := m.rows()
 	if len(rows) == 0 {
 		return
 	}
 	m.cursor, m.chose = min(max(m.cursor+delta, 0), len(rows)-1), true
+	m.scrollTo()
+}
+
+// step moves the selection in a project's graph one way (dx or dy, ±1) to
+// the nearest issue that way. Across: the nearest column that way, then the
+// nearest line. Up or down: the nearest line that way, then the nearest
+// cell. The issues linked to nothing are lines under the graph, at the cell
+// the selection last left an issue in the graph from, so up from them goes
+// back to it.
+func (m *model) step(dx, dy int) {
+	rows := m.rows()
+	if m.cursor >= len(rows) || dx != 0 && rows[m.cursor].node == nil {
+		return
+	}
+	g := &m.proj.graph
+	at := func(i int) (level, line, x int) {
+		if n := rows[i].node; n != nil {
+			return n.Level, n.Row, n.X + n.Width/2
+		}
+		return 0, g.Height + i - len(g.Nodes), m.col
+	}
+	level, line, x := at(m.cursor)
+	if rows[m.cursor].node != nil {
+		m.col = x
+	}
+	best, bestD := -1, [2]int{}
+	for i := range rows {
+		l, ln, cx := at(i)
+		var d [2]int
+		switch {
+		case dx != 0 && rows[i].node != nil && (l-level)*dx > 0:
+			d = [2]int{(l - level) * dx, max(ln-line, line-ln)}
+		case dy != 0 && (ln-line)*dy > 0:
+			d = [2]int{(ln - line) * dy, max(cx-x, x-cx)}
+		default:
+			continue
+		}
+		if best < 0 || cmp.Or(cmp.Compare(d[0], bestD[0]), cmp.Compare(d[1], bestD[1])) < 0 {
+			best, bestD = i, d
+		}
+	}
+	if best >= 0 {
+		m.cursor = best
+	}
+	m.chose = true
 	m.scrollTo()
 }
 
@@ -1238,6 +1334,10 @@ func (m model) viewHeading(rows []row, r row) string {
 
 // scrollTo keeps the selected row on screen, heading and all.
 func (m *model) scrollTo() {
+	if m.drilled != nil {
+		m.scrollGraph()
+		return
+	}
 	rows := m.rows()
 	if m.cursor < m.offset {
 		m.offset = m.cursor
@@ -1255,8 +1355,29 @@ func (m *model) scrollTo() {
 	m.offset = max(0, min(m.offset, len(rows)-1))
 }
 
-// visibleRows is how many rows fit from the offset: a page.
+// scrollGraph keeps the selection in a project's graph on screen: its line
+// among the lines shown and, for an issue in the graph, its label among the
+// cells shown, with a cell to spare each side.
+func (m *model) scrollGraph() {
+	lines, at := m.graphView()
+	if m.cursor >= len(at) {
+		return
+	}
+	h := m.graphHeight()
+	m.offset = max(min(m.offset, at[m.cursor]), at[m.cursor]-h+1)
+	m.offset = max(0, min(m.offset, len(lines)-h))
+	if n := m.rows()[m.cursor].node; n != nil {
+		m.xoff = max(min(m.xoff, n.X-1), n.X+n.Width+1-m.width)
+		m.xoff = max(0, min(m.xoff, m.proj.graph.Width+1-m.width))
+	}
+}
+
+// visibleRows is how many rows fit from the offset: a page; in a project's
+// graph, its lines shown.
 func (m model) visibleRows() int {
+	if m.drilled != nil {
+		return m.graphHeight()
+	}
 	rows := m.rows()
 	n, used := 0, 0
 	for i := m.offset; i < len(rows); i++ {
@@ -1269,10 +1390,15 @@ func (m model) visibleRows() int {
 	return max(1, n)
 }
 
-// rowAt is the row drawn on screen line y, if any: a heading isn't one.
-func (m model) rowAt(y int) (int, bool) {
+// rowAt is the row drawn at cell x of screen line y, if any: a heading
+// isn't one, and in a project's graph, neither are the lines between
+// issues.
+func (m model) rowAt(x, y int) (int, bool) {
 	if m.screen != screenList {
 		return 0, false
+	}
+	if m.drilled != nil {
+		return m.graphRowAt(x, y)
 	}
 	rows := m.rows()
 	top, end := listTop, listTop+m.listHeight()
@@ -1286,6 +1412,28 @@ func (m model) rowAt(y int) (int, bool) {
 		top++
 	}
 	return 0, false
+}
+
+// graphRowAt is rowAt in a project's graph.
+func (m model) graphRowAt(x, y int) (int, bool) {
+	if y < graphTop || y >= graphTop+m.graphHeight() {
+		return 0, false
+	}
+	line, cell := m.offset+y-graphTop, m.xoff+x
+	_, at := m.graphView()
+	rows := m.rows()
+	for i, l := range at {
+		if n := rows[i].node; l == line && (n == nil || cell >= n.X && cell < n.X+n.Width) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// graphHeight is the lines a project's graph view has: from graphTop down
+// to the status line.
+func (m model) graphHeight() int {
+	return max(3, m.height-graphTop-2)
 }
 
 func (m model) listHeight() int {
@@ -1356,7 +1504,19 @@ func (m model) view() string {
 		return b.String()
 	}
 
-	b.WriteString("\n" + m.filter.View() + "\n\n")
+	if m.drilled != nil {
+		b.WriteString("\n" + m.viewGraph())
+	} else {
+		b.WriteString("\n" + m.filter.View() + "\n\n" + m.viewList())
+	}
+	b.WriteString(m.statusLine())
+	b.WriteString(m.renderFooter(m.footer()))
+	return b.String()
+}
+
+// viewList is a tab's list, from the row it's scrolled to, listHeight lines.
+func (m model) viewList() string {
+	var b strings.Builder
 	rows := m.rows()
 	h, used := m.listHeight(), 0
 	for i := m.offset; i < len(rows); i++ {
@@ -1374,23 +1534,92 @@ func (m model) view() string {
 		used += m.headingHeight(rows, i) + 1
 	}
 	if len(rows) == 0 {
-		switch {
-		case m.mode == modeLoading:
-			b.WriteString("  " + m.spin.View() + " Loading…\n")
-		case m.lookingUp != "":
-			b.WriteString(styleDim.Render("  Looking up "+m.lookingUp+"…") + "\n")
-		default:
-			b.WriteString(styleDim.Render("  "+m.emptyText()) + "\n")
-		}
+		b.WriteString(m.viewEmpty() + "\n")
 		used++
 	}
 	for ; used < h; used++ {
 		b.WriteString("\n")
 	}
-
-	b.WriteString(m.statusLine())
-	b.WriteString(m.renderFooter(m.footer()))
 	return b.String()
+}
+
+// graphView lays out a project's issues: its graph's lines, whole, the
+// stage legend under them, then the issues linked to nothing under their
+// heading. at is the line each row is on.
+func (m model) graphView() (lines []string, at []int) {
+	rows := m.rows()
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	g := m.proj.graph
+	var sel *graphNode
+	var selIssue *issue // a Not linked row lights no lines
+	if r := m.selected(); r != nil && r.node != nil {
+		sel, selIssue = r.node, r.node.Issue
+	}
+	lines = g.render(func(n *graphNode) string {
+		l := nodeLabel(n, m.worktrees[issueTarget(*n.Issue).Branch])
+		if n == sel {
+			l = highlight(l, n.Width)
+		}
+		return l
+	}, func(s string, lit bool) string {
+		if lit {
+			return styleLead.Render(s)
+		}
+		return styleDim.Render(s)
+	}, selIssue)
+	for _, n := range g.Nodes {
+		at = append(at, n.Row)
+	}
+	if g.Height > 0 {
+		lines = append(lines, "", ansi.Truncate(" "+stageLegend(), m.width, ""))
+	}
+	if first := len(g.Nodes); first < len(rows) {
+		if g.Height > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, m.viewHeading(rows, rows[first]))
+		for i := first; i < len(rows); i++ {
+			at = append(at, len(lines))
+			lines = append(lines, m.viewRow(rows[i], i == m.cursor))
+		}
+	}
+	return lines, at
+}
+
+// viewGraph is a project's issues (graphView) from the line and, for the
+// graph's own lines, the cell it's scrolled to: graphHeight lines.
+func (m model) viewGraph() string {
+	lines, _ := m.graphView()
+	graphLines := 0
+	if lines == nil {
+		lines = []string{m.viewEmpty()}
+	} else {
+		graphLines = m.proj.graph.Height
+	}
+	var b strings.Builder
+	for i := m.offset; i < m.offset+m.graphHeight(); i++ {
+		switch {
+		case i < graphLines:
+			b.WriteString(ansi.Cut(lines[i], m.xoff, m.xoff+m.width))
+		case i < len(lines):
+			b.WriteString(lines[i])
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// viewEmpty is the line in place of an empty list.
+func (m model) viewEmpty() string {
+	switch {
+	case m.mode == modeLoading:
+		return "  " + m.spin.View() + " Loading…"
+	case m.lookingUp != "":
+		return styleDim.Render("  Looking up " + m.lookingUp + "…")
+	}
+	return styleDim.Render("  " + m.emptyText())
 }
 
 // emptyText says why a list has nothing in it.
@@ -1399,7 +1628,7 @@ func (m model) emptyText() string {
 	case m.filter.Value() != "":
 		return "Nothing matches."
 	case m.drilled != nil:
-		return "No open issues in this project. ctrl+c adds one."
+		return "No issues in this project. ctrl+c adds one."
 	case m.tab == tabProjects:
 		return "No projects under way."
 	case m.tab == tabRecent:
@@ -1426,11 +1655,15 @@ func (m model) statusLine() string {
 
 // about is what a row has no room for, of the selected one, for the status
 // line: an issue's priority, with its branch on the right; a project's
-// target date. Selecting a row doesn't change its height.
+// target date. Selecting a row doesn't change its height. In a project's
+// graph an issue is only its identifier, so it's issueInfo.
 func (m model) about() string {
 	r := m.selected()
 	if r == nil {
 		return ""
+	}
+	if m.drilled != nil {
+		return m.issueInfo(*r.issue)
 	}
 	left, branch := "", ""
 	if is := r.issue; is != nil {
@@ -1447,6 +1680,24 @@ func (m model) about() string {
 	right := styleBranch.Render(shorten(branch, max(1, min(48, m.width/2))))
 	left = styleDim.Render(shorten(left, max(1, m.width-lipgloss.Width(right)-4)))
 	return " " + left + strings.Repeat(" ", max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right)-2)) + right
+}
+
+// issueInfo is an issue in a project's graph, for the status line: its
+// title, status and PR stage, that it has a worktree, and what it waits for.
+func (m model) issueInfo(is issue) string {
+	facts := []string{is.State.Name}
+	if s := stageNames[is.stage()]; s != is.State.Name { // not "Done · Done"
+		facts = append(facts, s)
+	}
+	if m.worktrees[issueTarget(is).Branch] {
+		facts = append(facts, "worktree open")
+	}
+	if after := openBlockers(is); after != "" {
+		facts = append(facts, "after "+after)
+	}
+	rest := styleDim.Render(" · " + strings.Join(facts, " · "))
+	title := styleLead.Render(shorten(is.Title, max(1, m.width-lipgloss.Width(rest)-2)))
+	return ansi.Truncate(" "+title+rest, m.width, "…")
 }
 
 // viewSigningIn keeps the link on screen for the whole sign-in: opened in a
@@ -1697,8 +1948,8 @@ type meta struct {
 }
 
 // issueMeta is what's right of an issue's title: that it's urgent, whose it
-// is and its project (each only where the list doesn't already say), and
-// that it has a worktree.
+// is and its project (each only where the list doesn't already say), that
+// it has a worktree, and last, at the edge, what it waits for.
 func (m model) issueMeta(is *issue) []meta {
 	var ms []meta
 	if is.Priority == 1 {
@@ -1713,7 +1964,22 @@ func (m model) issueMeta(is *issue) []meta {
 	if m.worktrees[issueTarget(*is).Branch] {
 		ms = append(ms, meta{styleTree.Render("worktree"), 3})
 	}
+	if after := openBlockers(*is); after != "" {
+		ms = append(ms, meta{styleDim.Render("after " + shorten(after, 30)), 5})
+	}
 	return ms
+}
+
+// openBlockers lists the open issues that block is, for "after …": done or
+// canceled work holds nothing up.
+func openBlockers(is issue) string {
+	var ids []string
+	for _, b := range is.blockers() {
+		if isOpenState(b.State.Type) {
+			ids = append(ids, b.Identifier)
+		}
+	}
+	return strings.Join(ids, ", ")
 }
 
 // projectMeta is what's right of a project's name: that you lead it, that
@@ -1782,8 +2048,18 @@ func (m model) footer() []hint {
 	// By kind, so the colours sit together: go, act, view, leave. The tabs'
 	// keys are in the filter's placeholder.
 	hs := []hint{{"enter details", "enter", hintGo}, {"^s start", "ctrl+s", hintAct}}
-	if m.tab == tabProjects && m.drilled == nil {
-		hs = append(hs, hint{"^w worktree", "ctrl+w", hintAct})
+	if r := m.selected(); r != nil {
+		var t target
+		if r.issue != nil {
+			t = issueTarget(*r.issue)
+		} else {
+			t = projectTarget(*r.project)
+		}
+		w := "^w new worktree"
+		if m.worktrees[t.Branch] {
+			w = "^w go to worktree"
+		}
+		hs = append(hs, hint{w, "ctrl+w", hintAct})
 	}
 	hs = append(hs, hint{"^c new issue", "ctrl+c", hintAct}, hint{"^o open in Linear", "ctrl+o", hintView}, hint{"^r refresh", "ctrl+r", hintView}, hint{"^f teams", "ctrl+f", hintView})
 	if len(m.index.Workspaces) > 1 {

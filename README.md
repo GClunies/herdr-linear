@@ -214,9 +214,10 @@ Within a group, higher priority comes first.
   moves along.
 - Each status is a heading in its colour, with how many issues it has. The
   heading of the group you've scrolled into stays at the top of the list.
-- At the right edge: **urgent**, the project, and **worktree** if the issue's
-  worktree already exists. In a narrow popup the title keeps its room and the
-  edge gives way, the project first.
+- At the right edge: **urgent**, the project, **worktree** if the issue's
+  worktree already exists, and *after HAL-201* when open issues block it. In
+  a narrow popup the title keeps its room and the edge gives way, the project
+  first.
 - The line above the keys has the selected issue's priority and its branch.
 - The tabs along the top say how many each lists.
 - The selection starts on the top row and stays there while the lists load;
@@ -282,7 +283,7 @@ branch, and its content rendered as Markdown.
 
 | key          | does                                                   |
 |--------------|--------------------------------------------------------|
-| `i` or enter | the project's open issues, everyone's, not just yours  |
+| `i` or enter | the project's issues, everyone's, as a graph (below)   |
 | `w`          | a worktree for the whole project                       |
 | `s`          | start the project: its worktree, and a first prompt    |
 | `c`          | change the project's status (see [Changing status](#changing-status)) |
@@ -292,7 +293,9 @@ branch, and its content rendered as Markdown.
 
 ![A project's issues](docs/images/project-issues.png)
 
-In a project's issue list, issues assigned to someone else show their name.
+A project's issues are a graph of what blocks what, done ones too. Work runs left (first) to right (last): each issue is one column right of its latest blocker. An issue is its status icon and identifier, coloured by how far its work has got: gray not started, yellow in progress with no PR, green PR open, purple PR merged, blue done. The legend under the graph says so. An open issue from another project that blocks one of these is a dim issue at the left. An identifier is underlined when the issue has a worktree. Issues that nothing blocks and that block nothing are listed under the graph, under *Not linked*, with whoever they're assigned to.
+
+The arrows go to the nearest issue that way. The selected issue's own lines, to what blocks it and to what it blocks, are drawn bright and the rest stay dim, so its links stand out where lines meet. Down from the graph's bottom line goes into *Not linked*, and up from its top comes back. The view scrolls, down and sideways, to keep the selection on screen. The line above the keys has the selected issue's title, status, PR stage, *worktree open* when it has one, and what still blocks it (*after HAL-201, HAL-245*). Enter, `ctrl+s`, `ctrl+w` and `ctrl+o` work as in the lists, and esc goes back to the projects. There's no filtering a graph.
 
 ### Recent
 
@@ -380,7 +383,7 @@ In the list:
 | PgUp PgDn            | move a page                                            |
 | enter                | open the issue or project                              |
 | ctrl+s               | start the selected issue or project, from the list     |
-| ctrl+w               | worktree for the selected project                      |
+| ctrl+w               | go to the selected issue's or project's worktree, or create it |
 | ctrl+c               | a new issue, in the selected or open project if any (see [New issues](#new-issues)) |
 | ctrl+o               | open in Linear                                         |
 | ctrl+r               | refresh                                                |

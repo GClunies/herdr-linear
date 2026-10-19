@@ -130,14 +130,19 @@ func TestArrowsEditTheFilterWhenItHasText(t *testing.T) {
 	}
 }
 
-func TestLeftLeavesAProjectsIssues(t *testing.T) {
-	m := twoGroups()
-	m.tab = tabProjects
-	m.drilled = &project{ID: "p1", Name: "Daily brief"}
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	m = next.(model)
-	if m.drilled != nil || m.tab != tabProjects {
-		t.Fatalf("drilled %+v tab %v: ← should return to the projects list", m.drilled, m.tab)
+// A blocked issue says, at its edge, what it waits for: the open blockers,
+// not the done or canceled ones.
+func TestBlockedRowsSayWhatTheyWaitFor(t *testing.T) {
+	is := mkIssue("A-1", "started", "In Progress", 0, 0)
+	for _, b := range []struct{ id, state string }{{"B-1", "started"}, {"B-2", "completed"}, {"B-3", "canceled"}, {"B-4", "backlog"}} {
+		is.InverseRelations.Nodes = append(is.InverseRelations.Nodes,
+			relation{Type: "blocks", Issue: linkedIssue{ID: b.id, Identifier: b.id, State: workflowState{Type: b.state}}})
+	}
+	free := mkIssue("A-2", "started", "In Progress", 0, 0)
+	free.InverseRelations.Nodes = []relation{{Type: "related", Issue: linkedIssue{ID: "B-5", Identifier: "B-5", State: workflowState{Type: "started"}}}}
+	text := screenText(listModel(is, free))
+	if !strings.Contains(text, "after B-1, B-4") || strings.Contains(text, "B-2") || strings.Contains(text, "B-3") || strings.Contains(text, "B-5") {
+		t.Fatalf("list:\n%s", text)
 	}
 }
 
@@ -470,7 +475,7 @@ func TestTheGroupsHeadingStaysAtTheTopWhileScrolling(t *testing.T) {
 	}
 	// Every line the mouse finds a row on is that row's.
 	for y, line := range lines {
-		if i, ok := m.rowAt(y); ok && !strings.Contains(line, m.rows()[i].issue.Identifier+" ") {
+		if i, ok := m.rowAt(0, y); ok && !strings.Contains(line, m.rows()[i].issue.Identifier+" ") {
 			t.Fatalf("line %d %q isn't row %d", y, line, i)
 		}
 	}

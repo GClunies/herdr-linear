@@ -98,10 +98,18 @@ func TestQuickAddOnASelectedProjectAndInADrilledOne(t *testing.T) {
 		t.Fatalf("selected project: %q", f.projectID)
 	}
 	m = press(press(press(demoModel(t), "tab"), "enter"), "i") // in Offline sync's issues
-	n := len(m.projIss)
+	n := len(m.proj.issues)
 	m = press(typeText(press(m, "ctrl+c"), "Retry uploads"), "enter")
-	if len(m.projIss) != n+1 {
+	if len(m.proj.issues) != n+1 {
 		t.Fatal("the new issue isn't listed in its project")
+	}
+	// Linked to nothing yet, it's under the graph.
+	unlinked := false
+	for _, r := range m.rows() {
+		unlinked = unlinked || r.issue.Title == "Retry uploads" && r.group == "Not linked"
+	}
+	if !unlinked {
+		t.Fatal("the new issue isn't under Not linked")
 	}
 }
 

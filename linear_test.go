@@ -124,7 +124,7 @@ func TestQuerySurfacesGraphQLErrors(t *testing.T) {
 
 // TestListsAskLinearForTheTeamFilter checks the filter each list sends, as
 // JSON: Linear applies it, so a list fetches only what it shows. A project's
-// own issues stay everyone's.
+// own issues stay everyone's, done ones too: its graph shows them.
 func TestListsAskLinearForTheTeamFilter(t *testing.T) {
 	const (
 		open        = `"state":{"type":{"nin":["completed","canceled"]}}`
@@ -181,13 +181,58 @@ func TestListsAskLinearForTheTeamFilter(t *testing.T) {
 			if _, err := c.projectIssues(ctx, "p1"); err != nil {
 				t.Fatal(err)
 			}
-			want := []string{tc.mine, tc.created, tc.projects, `{` + open + `}`}
+			want := []string{tc.mine, tc.created, tc.projects, `{"state":{"type":{"neq":"canceled"}}}`}
 			for i, name := range []string{"My issues", "Recent", "Projects", "A project's issues"} {
 				if sent[i] != want[i] {
 					t.Errorf("%s filter\n got %s\nwant %s", name, sent[i], want[i])
 				}
 			}
 		})
+	}
+}
+
+// A project's issues come with the open issues elsewhere that block them,
+// fetched by id in a second query; done and canceled blockers stay out.
+func TestProjectIssuesAddsOpenBlockersFromElsewhere(t *testing.T) {
+	fakeStore(t, &tokens{AccessToken: "a", ExpiresAt: time.Now().Add(time.Hour)})
+	blocks := func(id, stateType string) map[string]any {
+		return map[string]any{"type": "blocks", "issue": map[string]any{"id": id, "identifier": strings.ToUpper(id), "state": map[string]any{"type": stateType}}}
+	}
+	var asked any
+	fakeLinear(t,
+		reply(200, map[string]any{"data": map[string]any{"project": map[string]any{"issues": map[string]any{"nodes": []any{
+			map[string]any{"id": "p-1", "identifier": "P-1", "state": map[string]any{"type": "unstarted"}, "project": map[string]any{"id": "p1"},
+				"inverseRelations": map[string]any{"nodes": []any{
+					blocks("x-1", "started"), blocks("x-2", "completed"), blocks("x-3", "canceled"), blocks("p-2", "started"),
+					map[string]any{"type": "related", "issue": map[string]any{"id": "x-4", "state": map[string]any{"type": "started"}}},
+				}}},
+			map[string]any{"id": "p-2", "identifier": "P-2", "state": map[string]any{"type": "started"}, "project": map[string]any{"id": "p1"},
+				"inverseRelations": map[string]any{"nodes": []any{blocks("x-1", "started")}}},
+		}}}}}),
+		func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Variables map[string]any `json:"variables"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			asked = body.Variables["ids"]
+			reply(200, map[string]any{"data": map[string]any{"issues": map[string]any{"nodes": []any{
+				map[string]any{"id": "x-1", "identifier": "X-1", "state": map[string]any{"type": "started"}, "project": map[string]any{"id": "p2"}},
+			}}}})(w, r)
+		},
+	)
+	is, err := (&linearClient{}).projectIssues(context.Background(), "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids, _ := json.Marshal(asked); string(ids) != `["x-1"]` {
+		t.Errorf("asked for blockers %s, want only the open one from elsewhere", ids)
+	}
+	var got []string
+	for _, x := range is {
+		got = append(got, x.Identifier)
+	}
+	if strings.Join(got, " ") != "P-2 P-1 X-1" {
+		t.Fatalf("issues %v", got)
 	}
 }
 
