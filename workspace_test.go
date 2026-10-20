@@ -126,6 +126,15 @@ func TestRepoKeyIsTheMainCheckout(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
+	// An inherited GIT_DIR or GIT_WORK_TREE points git, and repoKey, at the
+	// caller's repository: init rewrites its core.worktree, the commit lands on
+	// its branch, and worktree add registers there.
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "GIT_") {
+			t.Setenv(name, "")
+			os.Unsetenv(name)
+		}
+	}
 	dir, _ := filepath.EvalSymlinks(t.TempDir())
 	repo, wt := filepath.Join(dir, "repo"), filepath.Join(dir, "wt")
 	gitDo := func(args ...string) {
