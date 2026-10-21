@@ -1,0 +1,22 @@
+README.md
+  h_54e5c83907823d 496-498,579
+config.go
+  h_54e5c83907823d 22-25
+start_test.go
+  h_54e5c83907823d 6-7,82-83,86,103-125,280
+worktree.go
+  h_54e5c83907823d 237-240,244,370-373,375-380
+worktree_test.go
+  h_54e5c83907823d 121,181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "453b3f951e16d0926710af70b1bdfa4895097576",
+  "prompts": {},
+  "humans": {
+    "h_54e5c83907823d": {
+      "author": "Gregory Clunies <greg.clunies@gmail.com>"
+    }
+  }
+}
