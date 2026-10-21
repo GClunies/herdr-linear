@@ -118,7 +118,7 @@ func TestConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ClientID != defaultClientID || cfg.StartPrompt != "" || cfg.AgentWaitSeconds != 90 {
+	if cfg.ClientID != defaultClientID || cfg.StartPrompt != nil || cfg.AgentWaitSeconds != 90 {
 		t.Fatalf("%+v", cfg)
 	}
 }
@@ -178,7 +178,7 @@ func TestStartPromptUsesTicketOnlyWhereItExists(t *testing.T) {
 	}
 
 	// Yours wins, whatever's there.
-	if got := startPrompt(config{StartPrompt: "go {identifier}"}, is, worktree, repo); got != "go ENG-7" {
+	if got := startPrompt(config{StartPrompt: ptr("go {identifier}")}, is, worktree, repo); got != "go ENG-7" {
 		t.Errorf("start_prompt: %q", got)
 	}
 }

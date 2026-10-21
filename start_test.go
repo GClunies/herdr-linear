@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -77,9 +79,11 @@ func todo(id string) issue {
 	return is
 }
 
+func ptr(s string) *string { return &s }
+
 func startWith(r *startRig, src fakeLinearSource, loaded issue) actionDoneMsg {
 	src.calls = &r.calls
-	return doWorktree(context.Background(), config{StartPrompt: "/ticket {identifier}"}, src, "/repo", issueTarget(loaded), &loaded, true)
+	return doWorktree(context.Background(), config{StartPrompt: ptr("/ticket {identifier}")}, src, "/repo", issueTarget(loaded), &loaded, true)
 }
 
 func TestStartOrderWorktreeBeforeLinearBeforePrompt(t *testing.T) {
@@ -93,6 +97,29 @@ func TestStartOrderWorktreeBeforeLinearBeforePrompt(t *testing.T) {
 	}
 	if r.prompt != "/ticket ENG-1" {
 		t.Fatalf("prompt %q", r.prompt)
+	}
+}
+
+// "start_prompt": "" leaves the first prompt to whatever starts the agent (a
+// worktree hook, say): start still claims the issue, and types nothing.
+func TestEmptyStartPromptStartsWithoutPrompting(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"start_prompt": ""}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := rig(t)
+	loaded := todo("ENG-12")
+	msg := doWorktree(context.Background(), cfg, fakeLinearSource{fresh: loaded, calls: &r.calls}, "/repo", issueTarget(loaded), &loaded, true)
+	if msg.err != nil || msg.note != "" {
+		t.Fatalf("%+v", msg)
+	}
+	if got := strings.Join(r.calls, " "); got != "fresh worktree:b-ENG-12 fresh linear:Todo" {
+		t.Fatalf("calls: %s", got)
 	}
 }
 
@@ -250,7 +277,7 @@ func TestPromptUsesTheFreshIssue(t *testing.T) {
 	src := fakeLinearSource{fresh: fresh}
 	src.calls = &r.calls
 	loaded := todo("ENG-8")
-	doWorktree(context.Background(), config{StartPrompt: "{identifier}: {title}"}, src, "/repo", issueTarget(loaded), &loaded, true)
+	doWorktree(context.Background(), config{StartPrompt: ptr("{identifier}: {title}")}, src, "/repo", issueTarget(loaded), &loaded, true)
 	if r.prompt != "ENG-8: renamed since loading" {
 		t.Fatalf("prompt %q", r.prompt)
 	}

@@ -234,10 +234,14 @@ func doWorktree(ctx context.Context, cfg config, client source, invoked string, 
 		// Its agent may be mid-task: don't type into it.
 		return actionDoneMsg{note: is.Identifier + " is in progress. Its worktree already existed, so no prompt was sent."}
 	}
+	prompt := startPrompt(cfg, fresh, res.Worktree.Path, repo)
+	if prompt == "" {
+		return actionDoneMsg{}
+	}
 	if res.RootPane == nil || res.RootPane.PaneID == "" {
 		return actionDoneMsg{note: is.Identifier + " is in progress, but herdr didn't say which pane is the new worktree's, so no prompt was sent."}
 	}
-	if err := spawnKickoffFn(res.Workspace.WorkspaceID, res.RootPane.PaneID, startPrompt(cfg, fresh, res.Worktree.Path, repo)); err != nil {
+	if err := spawnKickoffFn(res.Workspace.WorkspaceID, res.RootPane.PaneID, prompt); err != nil {
 		return actionDoneMsg{note: "Worktree created, but the prompt couldn't be queued: " + err.Error()}
 	}
 	return actionDoneMsg{}
@@ -363,17 +367,17 @@ func expandProjectPrompt(tmpl string, p project) string {
 const defaultStartPrompt = "Work on the Linear issue {identifier}: {url}"
 
 // startPrompt is what start types into the new worktree's agent: your
-// start_prompt if you set one. Otherwise `/ticket {identifier}` where Claude
-// Code has a ticket skill or command (the new worktree's, its repo's, or
-// your own), and defaultStartPrompt where it hasn't: typed into an agent
-// without one, /ticket is only an unknown command.
+// start_prompt if you set one, and nothing if you set it empty. Otherwise
+// `/ticket {identifier}` where Claude Code has a ticket skill or command (the
+// new worktree's, its repo's, or your own), and defaultStartPrompt where it
+// hasn't: typed into an agent without one, /ticket is only an unknown command.
 func startPrompt(cfg config, is issue, dirs ...string) string {
-	tmpl := cfg.StartPrompt
-	if tmpl == "" {
-		tmpl = defaultStartPrompt
-		if hasTicketCommand(dirs...) {
-			tmpl = "/ticket {identifier}"
-		}
+	if cfg.StartPrompt != nil {
+		return expandPrompt(*cfg.StartPrompt, is)
+	}
+	tmpl := defaultStartPrompt
+	if hasTicketCommand(dirs...) {
+		tmpl = "/ticket {identifier}"
 	}
 	return expandPrompt(tmpl, is)
 }

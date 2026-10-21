@@ -493,6 +493,9 @@ About step 4:
   `{title}` and `{url}` filled in. Think twice before adding `{title}`: anyone
   in your workspace can write an issue title, and the agent will read it as
   part of its instructions.
+- Set `start_prompt` to `""` when whatever starts the agent also hands it the
+  issue, for example a `worktree.created` hook. Start still moves the issue
+  to In Progress, and types nothing.
 - This part runs in the background after the popup closes. Its log,
   `kickoff.log` in `~/.local/state/herdr/plugins/herdr-linear/`, records what
   happened but not the prompt itself.
@@ -573,7 +576,7 @@ herdr plugin config-dir herdr-linear
 |----------------------|----------------------------|--------------------------------------------------------------------------------------------------|
 | `repos`              | none                       | Linear team key → checkout. Used for that team's worktrees wherever you open the picker. With more than one workspace, `"acme/ENG"` is team ENG in workspace `acme` only, and wins over a plain `"ENG"`. |
 | `base`               | the remote's default branch | What new branches start from. Fetched first when it's a remote branch.                          |
-| `start_prompt`       | `/ticket` where there's one, else a plain prompt | What **start** types into the new worktree's agent. `{identifier}`, `{title}`, `{url}` are filled in. See [Start](#start), and the note on `{title}` there. |
+| `start_prompt`       | `/ticket` where there's one, else a plain prompt | What **start** types into the new worktree's agent. `{identifier}`, `{title}`, `{url}` are filled in. `""` types nothing. See [Start](#start), and the note on `{title}` there. |
 | `project_start_prompt` | `Work on the Linear project at {url}` | What starting a project types into its new worktree's agent. `{name}`, `{url}` are filled in. |
 | `agent_wait_seconds` | `90`                       | How long **start** waits for that agent to be ready.                                             |
 | `token_store`        | `auto`                     | Linux: where the sign-in is kept. `auto`, `keyring` or `file`: see [Tokens in a file](#tokens-in-a-file). macOS always uses the keychain. |
